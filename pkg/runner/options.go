@@ -56,7 +56,7 @@ func ParseOptions() *types.Options {
 
 	// Crawling / Recursion
 	flagSet.CreateGroup("recursion", "RECURSION",
-		flagSet.IntVar(&opts.Depth, "depth", 1, "recursion rounds after the root query (0 = root only)"),
+		flagSet.IntVar(&opts.Depth, "depth", 3, "max recursion rounds after root (auto-stops when a depth finds nothing new)"),
 		flagSet.IntVar(&opts.MaxHosts, "max-hosts", 5000, "stop enumerating a root after this many hosts (0 = no cap)"),
 		flagSet.StringSliceVar(&opts.Exclude, "exclude", nil, "out-of-scope hosts/suffixes (comma-separated)", goflags.CommaSeparatedStringSliceOptions),
 	)

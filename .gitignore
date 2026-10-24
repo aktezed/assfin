@@ -1,0 +1,41 @@
+# Binaries
+/assfin
+bin/
+dist/
+*.exe
+*.dll
+*.so
+*.dylib
+
+# Test binaries and coverage
+*.test
+*.out
+coverage.out
+coverage.html
+
+# SQLite database files
+*.db
+*.db-journal
+*.db-wal
+*.db-shm
+
+# Architecture & Internal Docs
+ARCHITECTURE.md
+Architecture.md
+architecture.md
+
+# Generated reports & local configs
+report.html
+.assfin-config.yaml
+
+# Go workspace & modules
+vendor/
+go.work.sum
+
+# IDE & OS
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+.DS_Store

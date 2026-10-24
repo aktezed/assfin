@@ -98,8 +98,8 @@ func ParseOptions() *types.Options {
 
 	// Report
 	flagSet.CreateGroup("report", "REPORT",
-		flagSet.BoolVar(&opts.Report, "report", false, "generate HTML report from database"),
-		flagSet.StringVar(&opts.ReportOutput, "out", "report.html", "HTML report output path"),
+		flagSet.BoolVar(&opts.Report, "report", false, "generate HTML report from database (or after scan)"),
+		flagSet.StringVar(&opts.ReportOutput, "out", "", "HTML report output path (default report.html)"),
 	)
 
 	// General
@@ -136,12 +136,12 @@ func validateOptions(opts *types.Options) error {
 	// Determine effective command if not set explicitly
 	if opts.Command == "" {
 		switch {
-		case opts.Report:
+		case opts.Domain != "" || opts.DomainList != "":
+			opts.Command = "scan"
+		case opts.Report || opts.ReportOutput != "":
 			opts.Command = "report"
 		case opts.Query || opts.RawSQL != "" || opts.HasWAF || opts.NoWAF || opts.Alive || opts.Dead || len(opts.Names) > 0 || len(opts.Tech) > 0 || opts.Status != "":
 			opts.Command = "query"
-		case opts.Domain != "" || opts.DomainList != "":
-			opts.Command = "scan"
 		default:
 			return errors.New("no command or targets specified (use -d, -dL, -q, or -report)")
 		}

@@ -53,6 +53,8 @@ func main() {
 
 ```bash
 assfin scan -d example.com                       # -> example.com.db
+assfin scan -d example.com -report               # -> example.com.db + report.html in one command
+assfin scan -d example.com -out example.html     # -> example.com.db + example.html in one command
 assfin scan -dL roots.txt -db program.db         # several roots, one DB
 assfin scan -d example.com -exclude legacy.example.com,cdn.example.com
 ```

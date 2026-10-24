@@ -148,6 +148,17 @@ func (r *Runner) ExecuteScan(ctx context.Context) error {
 		gologger.Info().Msgf("%s: %d hosts, %d alive, %d behind WAF, %d new -> %s", root, len(all), alive, wafCount, fresh, dbPath)
 	}
 
+	if r.options.Report || r.options.ReportOutput != "" {
+		out := r.options.ReportOutput
+		if out == "" {
+			out = "report.html"
+		}
+		if err := report.WriteReport(dbStore, out); err != nil {
+			return fmt.Errorf("write report: %w", err)
+		}
+		gologger.Info().Msgf("report written to %s", out)
+	}
+
 	return nil
 }
 

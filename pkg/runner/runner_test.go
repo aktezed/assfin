@@ -55,4 +55,16 @@ func TestRunnerQueryAndReport(t *testing.T) {
 		t.Fatalf("run report: %v", err)
 	}
 	rReport.Close()
+
+	// Test validateOptions with scan + report in one command
+	oneLineOpts := &types.Options{
+		Domain: "example.com",
+		Report: true,
+	}
+	if err := validateOptions(oneLineOpts); err != nil {
+		t.Fatalf("validateOptions scan+report: %v", err)
+	}
+	if oneLineOpts.Command != "scan" {
+		t.Fatalf("expected Command 'scan', got %q", oneLineOpts.Command)
+	}
 }

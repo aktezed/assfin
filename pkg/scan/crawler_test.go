@@ -64,6 +64,17 @@ func TestCrawlDepthScopeDedup(t *testing.T) {
 	}
 }
 
+func TestCrawlAutoDepth(t *testing.T) {
+	found, calls := run(t, CrawlOpts{Depth: -1, Conc: 3, Exclude: []string{"skip.a.com"}})
+	// With Depth: -1 (auto), it climbs x.a.com -> y.x.a.com -> z.y.x.a.com -> deep.z.y.x.a.com and stops when deep.z.y.x.a.com returns nothing new.
+	if !slices.Contains(found, "deep.z.y.x.a.com") {
+		t.Fatalf("expected auto depth to reach deep.z.y.x.a.com, got %v", found)
+	}
+	if calls["deep.z.y.x.a.com"] != 1 {
+		t.Errorf("expected deep.z.y.x.a.com to be queried once before auto-stopping, got %d", calls["deep.z.y.x.a.com"])
+	}
+}
+
 func TestCrawlRootOnly(t *testing.T) {
 	found, calls := run(t, CrawlOpts{Depth: 0, Conc: 1})
 	if len(calls) != 1 || calls["a.com"] != 1 {

@@ -93,7 +93,11 @@ func (r *Runner) ExecuteScan(ctx context.Context) error {
 			return err
 		}
 
-		gologger.Info().Msgf("enumerating %s (depth %d, passive only)", root, r.options.Depth)
+		depthLabel := "auto"
+		if r.options.Depth >= 0 {
+			depthLabel = strconv.Itoa(r.options.Depth)
+		}
+		gologger.Info().Msgf("enumerating %s (depth %s, passive only)", root, depthLabel)
 		if err := dbStore.UpsertHost(scanID, root, root, 0, nil); err != nil {
 			return err
 		}

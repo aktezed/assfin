@@ -13,7 +13,7 @@ type EnumFunc func(ctx context.Context, domain string) (map[string][]string, err
 
 // CrawlOpts defines options for recursive enumeration crawling.
 type CrawlOpts struct {
-	Depth    int      // recursion rounds after the root query (0 = root only)
+	Depth    int      // recursion rounds after the root query (-1 = auto/unlimited until no new hosts, 0 = root only)
 	MaxHosts int      // stop once this many hosts are known
 	Conc     int      // domains enumerated in parallel
 	Exclude  []string // hosts or suffixes to drop
@@ -41,7 +41,7 @@ func Crawl(ctx context.Context, root string, o CrawlOpts, enum EnumFunc, onFound
 	// Reuse a single semaphore channel across all rounds to avoid per-round allocations.
 	sem := make(chan struct{}, max(o.Conc, 1))
 
-	for round := 0; round <= o.Depth && len(level) > 0 && !full(); round++ {
+	for round := 0; (o.Depth < 0 || round <= o.Depth) && len(level) > 0 && !full(); round++ {
 		var next []string
 		var wg sync.WaitGroup
 		for i, d := range level {
@@ -112,7 +112,7 @@ func Crawl(ctx context.Context, root string, o CrawlOpts, enum EnumFunc, onFound
 		}
 		// Smart branch pruning: when a round yields >15 subdomains, avoid querying hundreds of flat leaf hosts
 		// that would stall for minutes and trigger HTTP 429 on free OSINT providers.
-		if round < o.Depth && len(next) > 15 {
+		if (o.Depth < 0 || round < o.Depth) && len(next) > 15 {
 			next = pruneBranches(next, seen, root)
 		}
 		log.Printf("round %d: %d newqueued, %d total hosts", round, len(next), len(seen))

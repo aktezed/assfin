@@ -65,7 +65,7 @@ Re-running a scan updates the same DB. Hosts found for the first time are marked
 
 | Flag | Default | |
 |---|---|---|
-| `-depth` | `3` | max recursion rounds after root (auto-stops early if a round finds nothing new) |
+| `-depth` | `-1` (auto) | auto-increases depth (`1 -> 2 -> 3 -> 4...`) as long as new subdomains appear, and stops immediately when a round finds `0` new (`0` = root only) |
 | `-max-hosts` | `5000` | stop enumerating a root at this many hosts |
 | `-sf-concurrency` | `5` | subdomains enumerated in parallel |
 | `-sf-timeout` / `-sf-max-time` | `15`s / `2`min | subfinder source timeout / per-domain cap |

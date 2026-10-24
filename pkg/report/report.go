@@ -7,8 +7,8 @@ import (
 	"os"
 	"time"
 
-	"github.com/dzaki/assfin/pkg/store"
-	"github.com/dzaki/assfin/pkg/types"
+	"github.com/aktezed/assfin/pkg/store"
+	"github.com/aktezed/assfin/pkg/types"
 )
 
 //go:embed report.html

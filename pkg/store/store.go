@@ -9,7 +9,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/dzaki/assfin/pkg/types"
+	"github.com/aktezed/assfin/pkg/types"
 	_ "modernc.org/sqlite"
 )
 

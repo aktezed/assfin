@@ -5,8 +5,8 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/dzaki/assfin/pkg/types"
-	"github.com/dzaki/assfin/pkg/waf"
+	"github.com/aktezed/assfin/pkg/types"
+	"github.com/aktezed/assfin/pkg/waf"
 	"github.com/projectdiscovery/goflags"
 	httpx "github.com/projectdiscovery/httpx/runner"
 )

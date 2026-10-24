@@ -1,4 +1,4 @@
-module github.com/dzaki/assfin
+module github.com/aktezed/assfin
 
 go 1.27.1
 

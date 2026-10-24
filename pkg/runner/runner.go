@@ -11,10 +11,10 @@ import (
 	"strings"
 	"text/tabwriter"
 
-	"github.com/dzaki/assfin/pkg/report"
-	"github.com/dzaki/assfin/pkg/scan"
-	"github.com/dzaki/assfin/pkg/store"
-	"github.com/dzaki/assfin/pkg/types"
+	"github.com/aktezed/assfin/pkg/report"
+	"github.com/aktezed/assfin/pkg/scan"
+	"github.com/aktezed/assfin/pkg/store"
+	"github.com/aktezed/assfin/pkg/types"
 	"github.com/projectdiscovery/gologger"
 )
 

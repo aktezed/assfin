@@ -5,8 +5,8 @@ import (
 	"path/filepath"
 	"testing"
 
-	"github.com/dzaki/assfin/pkg/store"
-	"github.com/dzaki/assfin/pkg/types"
+	"github.com/aktezed/assfin/pkg/store"
+	"github.com/aktezed/assfin/pkg/types"
 )
 
 func TestRunnerQueryAndReport(t *testing.T) {

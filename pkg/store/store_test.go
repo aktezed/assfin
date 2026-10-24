@@ -5,7 +5,7 @@ import (
 	"slices"
 	"testing"
 
-	"github.com/dzaki/assfin/pkg/types"
+	"github.com/aktezed/assfin/pkg/types"
 )
 
 func seedDB(t *testing.T) (string, func(types.Filter) []string) {

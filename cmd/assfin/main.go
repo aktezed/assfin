@@ -5,7 +5,7 @@ import (
 	"os"
 	"os/signal"
 
-	"github.com/dzaki/assfin/pkg/runner"
+	"github.com/aktezed/assfin/pkg/runner"
 	"github.com/projectdiscovery/gologger"
 )
 

@@ -6,10 +6,10 @@ Recursive, passive subdomain recon in one Go binary. It runs [subfinder](https:/
 
 ```bash
 # Install binary to $GOPATH/bin
-go install -v github.com/dzaki/assfin/cmd/assfin@latest
+go install -v github.com/aktezed/assfin/cmd/assfin@latest
 
 # Or build locally
-git clone https://github.com/dzaki/assfin.git
+git clone https://github.com/aktezed/assfin.git
 cd assfin
 make build # creates bin/assfin
 ```
@@ -25,8 +25,8 @@ import (
 	"context"
 	"log"
 
-	"github.com/dzaki/assfin/pkg/runner"
-	"github.com/dzaki/assfin/pkg/types"
+	"github.com/aktezed/assfin/pkg/runner"
+	"github.com/aktezed/assfin/pkg/types"
 )
 
 func main() {

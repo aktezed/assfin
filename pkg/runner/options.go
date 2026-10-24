@@ -56,24 +56,24 @@ func ParseOptions() *types.Options {
 
 	// Crawling / Recursion
 	flagSet.CreateGroup("recursion", "RECURSION",
-		flagSet.IntVar(&opts.Depth, "depth", 2, "recursion rounds after the root query (0 = root only)"),
+		flagSet.IntVar(&opts.Depth, "depth", 1, "recursion rounds after the root query (0 = root only)"),
 		flagSet.IntVar(&opts.MaxHosts, "max-hosts", 5000, "stop enumerating a root after this many hosts (0 = no cap)"),
 		flagSet.StringSliceVar(&opts.Exclude, "exclude", nil, "out-of-scope hosts/suffixes (comma-separated)", goflags.CommaSeparatedStringSliceOptions),
 	)
 
 	// Subfinder
 	flagSet.CreateGroup("subfinder", "SUBFINDER",
-		flagSet.IntVar(&opts.SubfinderTimeout, "sf-timeout", 30, "subfinder per-source timeout in seconds"),
-		flagSet.IntVar(&opts.SubfinderMaxTime, "sf-max-time", 5, "subfinder max minutes per domain"),
-		flagSet.IntVar(&opts.SubfinderConcurrency, "sf-concurrency", 1, "subdomains enumerated in parallel"),
+		flagSet.IntVar(&opts.SubfinderTimeout, "sf-timeout", 15, "subfinder per-source timeout in seconds"),
+		flagSet.IntVar(&opts.SubfinderMaxTime, "sf-max-time", 2, "subfinder max minutes per domain"),
+		flagSet.IntVar(&opts.SubfinderConcurrency, "sf-concurrency", 5, "subdomains enumerated in parallel"),
 		flagSet.StringVarP(&opts.ProviderConfig, "provider-config", "pc", "", "subfinder provider-config.yaml"),
 	)
 
 	// HTTPX Probing
 	flagSet.CreateGroup("httpx", "PROBING",
-		flagSet.IntVar(&opts.RateLimit, "rate", 10, "httpx max requests per second"),
-		flagSet.IntVar(&opts.Threads, "threads", 10, "httpx threads"),
-		flagSet.IntVar(&opts.Timeout, "timeout", 10, "httpx request timeout in seconds"),
+		flagSet.IntVar(&opts.RateLimit, "rate", 30, "httpx max requests per second"),
+		flagSet.IntVar(&opts.Threads, "threads", 25, "httpx threads"),
+		flagSet.IntVar(&opts.Timeout, "timeout", 7, "httpx request timeout in seconds"),
 		flagSet.BoolVar(&opts.FollowRedirects, "follow", false, "follow redirects when probing"),
 		flagSet.BoolVar(&opts.NoProbe, "no-probe", false, "enumerate only, skip httpx"),
 	)

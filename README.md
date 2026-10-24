@@ -61,16 +61,16 @@ assfin scan -d example.com -exclude legacy.example.com,cdn.example.com
 
 Re-running a scan updates the same DB. Hosts found for the first time are marked **new**, and every host is probed again so dead ones show up as dead.
 
-### Gentle by default
+### WAF-Safe Fast Defaults
 
 | Flag | Default | |
 |---|---|---|
-| `-depth` | `2` | recursion rounds after the root query (`0` = root only) |
+| `-depth` | `1` | smart branch recursion rounds after the root query (`0` = root only) |
 | `-max-hosts` | `5000` | stop enumerating a root at this many hosts |
-| `-sf-concurrency` | `1` | subdomains enumerated in parallel |
-| `-sf-timeout` / `-sf-max-time` | `30`s / `5`min | subfinder source timeout / per-domain cap |
-| `-rate` | `10` | httpx requests per second |
-| `-threads` / `-timeout` | `10` / `10`s | httpx |
+| `-sf-concurrency` | `5` | subdomains enumerated in parallel |
+| `-sf-timeout` / `-sf-max-time` | `15`s / `2`min | subfinder source timeout / per-domain cap |
+| `-rate` | `30` | httpx requests per second (WAF-safe sweet spot) |
+| `-threads` / `-timeout` | `25` / `7`s | httpx worker threads and timeout |
 | `-follow` | off | follow redirects |
 | `-no-probe` | off | enumerate only, send nothing to the target |
 

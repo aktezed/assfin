@@ -21,6 +21,9 @@ type ProbeOpts struct {
 
 // Probe runs httpx over hosts; onResult is called for each host that answered HTTP(S).
 func Probe(ctx context.Context, hosts []string, o ProbeOpts, onResult func(host string, p types.Probe)) error {
+	if len(hosts) == 0 {
+		return nil
+	}
 	opts := httpx.Options{
 		Methods:                   "GET",
 		InputTargetHost:           goflags.StringSlice(hosts),

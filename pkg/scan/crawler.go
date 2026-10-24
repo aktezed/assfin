@@ -19,18 +19,30 @@ type CrawlOpts struct {
 	Exclude  []string // hosts or suffixes to drop
 }
 
-// Crawl queries root, then every newly found subdomain, level by level, until nothing new
+// hubPrefixes are common environment/infrastructure subdomain labels worth recursing into on large domains.
+var hubPrefixes = map[string]bool{
+	"api": true, "dev": true, "stg": true, "stage": true, "staging": true,
+	"prod": true, "corp": true, "internal": true, "int": true, "test": true,
+	"uat": true, "qa": true, "admin": true, "auth": true, "sso": true,
+	"vpn": true, "cloud": true, "k8s": true, "app": true, "portal": true,
+	"beta": true, "sandbox": true,
+}
+
+// Crawl queries root, then newly found subdomains level by level until nothing new
 // appears or a cap is hit. onFound is called once per new host (never for root) and is serialized.
 func Crawl(ctx context.Context, root string, o CrawlOpts, enum EnumFunc, onFound func(host string, sources []string)) error {
 	seen := map[string]bool{root: true}
+	queried := map[string]bool{root: true}
 	level := []string{root}
 	var mu sync.Mutex
 	var notifyMu sync.Mutex
 	full := func() bool { return o.MaxHosts > 0 && len(seen) >= o.MaxHosts }
 
+	// Reuse a single semaphore channel across all rounds to avoid per-round allocations.
+	sem := make(chan struct{}, max(o.Conc, 1))
+
 	for round := 0; round <= o.Depth && len(level) > 0 && !full(); round++ {
 		var next []string
-		sem := make(chan struct{}, max(o.Conc, 1))
 		var wg sync.WaitGroup
 		for i, d := range level {
 			if ctx.Err() != nil {
@@ -72,7 +84,17 @@ func Crawl(ctx context.Context, root string, o CrawlOpts, enum EnumFunc, onFound
 						continue
 					}
 					seen[h] = true
-					next = append(next, h)
+					if !queried[h] {
+						queried[h] = true
+						next = append(next, h)
+					}
+					// Extract intermediate parent zones (e.g. x.dev.a.com -> dev.a.com) as branch candidates
+					for _, p := range parentBranches(h, domain) {
+						if !queried[p] && InScope(p, root, o.Exclude) {
+							queried[p] = true
+							next = append(next, p)
+						}
+					}
 					toNotify = append(toNotify, item{host: h, sources: res[raw]})
 				}
 				mu.Unlock()
@@ -88,10 +110,54 @@ func Crawl(ctx context.Context, root string, o CrawlOpts, enum EnumFunc, onFound
 		if err := ctx.Err(); err != nil {
 			return err
 		}
-		log.Printf("round %d: %d new, %d total", round, len(next), len(seen))
+		// Smart branch pruning: when a round yields >15 subdomains, avoid querying hundreds of flat leaf hosts
+		// that would stall for minutes and trigger HTTP 429 on free OSINT providers.
+		if round < o.Depth && len(next) > 15 {
+			next = pruneBranches(next, seen, root)
+		}
+		log.Printf("round %d: %d newqueued, %d total hosts", round, len(next), len(seen))
 		level = next
 	}
 	return nil
+}
+
+// parentBranches extracts intermediate parent domains between host and base (e.g. a.b.base -> b.base).
+func parentBranches(host, base string) []string {
+	suffix := "." + base
+	if !strings.HasSuffix(host, suffix) {
+		return nil
+	}
+	sub := strings.TrimSuffix(host, suffix)
+	parts := strings.Split(sub, ".")
+	if len(parts) <= 1 {
+		return nil
+	}
+	var out []string
+	for i := 1; i < len(parts); i++ {
+		out = append(out, strings.Join(parts[i:], ".")+suffix)
+	}
+	return out
+}
+
+// pruneBranches filters large candidate lists down to confirmed parent branches and high-value environment hubs.
+func pruneBranches(candidates []string, seen map[string]bool, root string) []string {
+	hasChild := make(map[string]bool, len(candidates))
+	for h := range seen {
+		for _, p := range parentBranches(h, root) {
+			hasChild[p] = true
+		}
+	}
+	var kept []string
+	for _, c := range candidates {
+		firstLabel := c
+		if idx := strings.IndexByte(c, '.'); idx > 0 {
+			firstLabel = c[:idx]
+		}
+		if hasChild[c] || hubPrefixes[firstLabel] {
+			kept = append(kept, c)
+		}
+	}
+	return kept
 }
 
 // Normalize sanitizes and standardizes a domain name.

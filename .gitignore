@@ -24,8 +24,8 @@ ARCHITECTURE.md
 Architecture.md
 architecture.md
 
-# Generated reports & local configs
-report.html
+# Generated reports & local configs (root only)
+/report.html
 .assfin-config.yaml
 
 # Go workspace & modules

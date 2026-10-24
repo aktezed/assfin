@@ -6,7 +6,7 @@ Recursive, passive subdomain recon in one Go binary. It runs [subfinder](https:/
 
 ```bash
 # Install binary to $GOPATH/bin
-go install -v github.com/aktezed/assfin/cmd/assfin@latest
+go install -v github.com/aktezed/assfin@latest
 
 # Or build locally
 git clone https://github.com/aktezed/assfin.git
@@ -88,18 +88,19 @@ assfin query -db example.com.db -alive -no-waf             # reachable, no WAF d
 assfin query -db example.com.db -tech wordpress -status 200
 assfin query -db example.com.db -waf-name cloudflare
 assfin query -db example.com.db -new -o list | nuclei      # new hosts only, pipe-friendly
-assfin query -db example.com.db -depth 2 -o json
+assfin query -db example.com.db -filter-depth 2 -o json
 assfin query -db example.com.db -sql "SELECT host, title FROM hosts WHERE status = 401"
 ```
 
-Filters combine with AND. Repeating a flag or listing values with commas means OR. `-depth` is the label depth: `1` = `x.example.com`, `2` = `y.x.example.com`. Raw `-sql` runs on a read-only connection.
+Filters combine with AND. Repeating a flag or listing values with commas means OR. `-filter-depth` is the label depth: `1` = `x.example.com`, `2` = `y.x.example.com`. Raw `-sql` runs on a read-only connection.
 
 Columns in `hosts`: `host root depth sources first_seen last_seen first_scan last_scan alive url status title server tech ips cdn waf length`. `tech` is stored as `,Nginx:1.21,PHP,`.
 
 ## Report
 
 ```bash
-assfin report -db example.com.db -out report.html
+assfin report -db example.com.db                    # -> report.html
+assfin report -db example.com.db -out custom.html   # -> custom.html
 ```
 
 A single HTML file that works offline. It has a bar splitting hosts into reachable without a WAF, behind a WAF, and no response, plus search, status and tech filters, sortable columns, and a details row for each host.

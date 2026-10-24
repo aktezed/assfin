@@ -22,6 +22,7 @@ func main() {
 	defer r.Close()
 
 	if err := r.Run(ctx); err != nil {
+		_ = r.Close()
 		gologger.Fatal().Msgf("Execution failed: %s\n", err)
 	}
 }

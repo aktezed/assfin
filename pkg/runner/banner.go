@@ -4,7 +4,7 @@ import (
 	"github.com/projectdiscovery/gologger"
 )
 
-const version = "1.0.0"
+const version = "v1.0.4"
 
 const banner = `
                   ____ _       
@@ -17,5 +17,5 @@ const banner = `
 // showBanner prints the application banner.
 func showBanner() {
 	gologger.Print().Msgf("%s\n", banner)
-	gologger.Print().Msgf("\t\tdzaki/assfin %s\n\n", version)
+	gologger.Print().Msgf("\t\taktezed/assfin %s\n\n", version)
 }

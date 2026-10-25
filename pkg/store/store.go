@@ -197,7 +197,17 @@ func (s *Store) RawQuery(q string) ([]string, [][]string, error) {
 
 // GetScansSummary returns a summary of scans grouped by root domain.
 func (s *Store) GetScansSummary() ([]types.RootInfo, error) {
-	rows, err := s.db.Query(`SELECT root, coalesce(max(finished), max(started)), count(*) FROM scans GROUP BY root ORDER BY root`)
+	query := `
+SELECT s.root,
+       coalesce(s.finished, s.started, '') AS last,
+       (SELECT count(*) FROM scans WHERE root = s.root) AS scan_count,
+       coalesce(s.started, ''),
+       coalesce(s.finished, '')
+FROM scans s
+WHERE s.id IN (SELECT max(id) FROM scans GROUP BY root)
+ORDER BY s.root`
+
+	rows, err := s.db.Query(query)
 	if err != nil {
 		return nil, err
 	}
@@ -205,8 +215,17 @@ func (s *Store) GetScansSummary() ([]types.RootInfo, error) {
 	roots := []types.RootInfo{}
 	for rows.Next() {
 		var r types.RootInfo
-		if err := rows.Scan(&r.Root, &r.Last, &r.Scans); err != nil {
+		if err := rows.Scan(&r.Root, &r.Last, &r.Scans, &r.Started, &r.Finished); err != nil {
 			return nil, err
+		}
+		if r.Started != "" && r.Finished != "" {
+			tStart, err1 := time.Parse(time.RFC3339, r.Started)
+			tFinish, err2 := time.Parse(time.RFC3339, r.Finished)
+			if err1 == nil && err2 == nil && !tFinish.Before(tStart) {
+				dur := tFinish.Sub(tStart)
+				r.Duration = types.FormatDuration(dur)
+				r.DurationSec = dur.Seconds()
+			}
 		}
 		roots = append(roots, r)
 	}

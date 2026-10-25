@@ -38,6 +38,10 @@ func TestWriteReport(t *testing.T) {
 		t.Fatalf("save probe: %v", err)
 	}
 
+	if err := s.FinishScan(scanID); err != nil {
+		t.Fatalf("finish scan: %v", err)
+	}
+
 	outPath := filepath.Join(t.TempDir(), "report.html")
 	if err := WriteReport(s, outPath); err != nil {
 		t.Fatalf("write report: %v", err)

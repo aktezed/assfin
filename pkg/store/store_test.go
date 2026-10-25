@@ -98,3 +98,38 @@ func TestReadOnlyRejectsWrites(t *testing.T) {
 		t.Fatalf("got %v %v %v", cols, rows, err)
 	}
 }
+
+func TestGetScansSummary(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "summary.db")
+	s, err := New(path, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+
+	scanID, err := s.StartScan("example.com", "{}")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if err := s.FinishScan(scanID); err != nil {
+		t.Fatal(err)
+	}
+
+	summaries, err := s.GetScansSummary()
+	if err != nil {
+		t.Fatalf("GetScansSummary: %v", err)
+	}
+	if len(summaries) != 1 {
+		t.Fatalf("expected 1 summary, got %d", len(summaries))
+	}
+	if summaries[0].Root != "example.com" {
+		t.Errorf("expected root 'example.com', got %q", summaries[0].Root)
+	}
+	if summaries[0].Scans != 1 {
+		t.Errorf("expected 1 scan, got %d", summaries[0].Scans)
+	}
+	if summaries[0].Last == "" {
+		t.Errorf("expected non-empty Last")
+	}
+}

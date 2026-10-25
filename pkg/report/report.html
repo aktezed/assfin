@@ -9,72 +9,105 @@
 <style>
   :root {
     --page: #f5f5f7; --card: #ffffff; --well: #fafafa; --ink: #09090b;
-    --muted: #6e6e73; --faint: #a1a1a6; --line: rgba(0,0,0,.07); --line-strong: rgba(0,0,0,.14);
-    --waf: #8e8e93; --dead: #dcdce1;
+    --muted: #52525b; --faint: #68686e; --line: rgba(0,0,0,.07); --line-strong: rgba(0,0,0,.15);
+    --waf: #71717a; --dead: #c7c7cc;
     --sans: Inter, system-ui, -apple-system, "Segoe UI", sans-serif;
     --mono: "JetBrains Mono", ui-monospace, "SF Mono", Menlo, monospace;
   }
   * { box-sizing: border-box; }
-  body { margin: 0; background: var(--page); color: var(--ink); font: 14px/1.5 var(--sans); -webkit-font-smoothing: antialiased; }
+  ::selection { background: var(--ink); color: #ffffff; }
+  body { margin: 0; background: var(--page); color: var(--ink); font: 14px/1.5 var(--sans); -webkit-font-smoothing: antialiased; caret-color: var(--ink); }
   .num { font-family: var(--mono); font-variant-numeric: tabular-nums; }
-  .wrap { max-width: 1280px; margin: 0 auto; padding: 40px 24px 80px; }
+  .faint { color: var(--faint); }
+  .wrap { max-width: 1280px; margin: 0 auto; padding: 24px 24px 64px; }
   button, input, select { font: inherit; color: inherit; }
+  a { color: var(--ink); text-underline-offset: 3px; }
   :focus-visible { outline: 2px solid var(--ink); outline-offset: 2px; }
 
   header { display: flex; justify-content: space-between; align-items: baseline; gap: 16px; color: var(--muted); font-size: 13px; }
-  .brand { font-weight: 600; color: var(--ink); letter-spacing: -0.01em; }
-  h1 { font-size: clamp(40px, 7vw, 84px); line-height: 1; letter-spacing: -0.045em; font-weight: 700; margin: 40px 0 12px; overflow-wrap: anywhere; }
-  .sub { color: var(--muted); margin: 0 0 32px; display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
+  .brand { font-weight: 600; color: var(--ink); letter-spacing: -0.02em; }
+  h1 { font-size: clamp(28px, 4vw, 44px); line-height: 1.08; letter-spacing: -0.035em; font-weight: 700; margin: 16px 0 8px; overflow-wrap: anywhere; }
+  .sub { color: var(--muted); margin: 0 0 20px; display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
   .dur-badge { display: inline-flex; align-items: center; gap: 5px; padding: 2px 10px; border-radius: 999px; background: var(--well); border: 1px solid var(--line); color: var(--ink); font-size: 12.5px; }
-  .dur-badge svg { opacity: .65; }
+  .dur-badge svg { opacity: .7; }
 
-  .surface { background: var(--card); border: 1px solid var(--line); border-radius: 28px; padding: 28px; box-shadow: 0 1px 2px rgba(0,0,0,.03), 0 10px 30px rgba(0,0,0,.04); }
-  .bar { display: flex; height: 14px; border-radius: 999px; overflow: hidden; background: var(--well); gap: 3px; }
-  .seg { width: 0; border-radius: 999px; transition: width .9s cubic-bezier(.2,.8,.2,1); }
+  .surface { background: var(--card); border: 1px solid var(--line); border-radius: 20px; padding: 20px 24px; box-shadow: 0 1px 2px rgba(0,0,0,.03), 0 8px 24px rgba(0,0,0,.03); }
+  .bar { display: flex; height: 12px; border-radius: 999px; overflow: hidden; background: var(--well); gap: 3px; }
+  .seg { width: 0; border-radius: 999px; transition: width .6s cubic-bezier(.22,1,.36,1); }
   .seg.exposed { background: var(--ink); } .seg.waf { background: var(--waf); } .seg.dead { background: var(--dead); }
-  .legend { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 18px; }
-  .key { display: inline-flex; align-items: center; gap: 10px; padding: 8px 14px 8px 12px; border-radius: 999px; border: 1px solid var(--line); background: var(--well); cursor: pointer; }
+  .legend { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 14px; }
+  .key { display: inline-flex; align-items: center; gap: 8px; padding: 7px 14px 7px 11px; border-radius: 999px; border: 1px solid var(--line); background: var(--well); cursor: pointer; transition: border-color .15s ease, background-color .15s ease, color .15s ease; }
   .key:hover { border-color: var(--line-strong); }
-  .key[aria-pressed="true"] { background: var(--ink); color: #fff; border-color: var(--ink); }
-  .key[aria-pressed="true"] .dot.exposed { background: #fff; }
-  .dot { width: 9px; height: 9px; border-radius: 50%; }
-  .dot.exposed { background: var(--ink); } .dot.waf { background: var(--waf); } .dot.dead { background: var(--dead); } .dot.new { background: transparent; border: 2px solid currentColor; width: 10px; height: 10px; }
+  .key[aria-pressed="true"] { background: var(--ink); color: #ffffff; border-color: var(--ink); }
+  .key[aria-pressed="true"] .dot.exposed { background: #ffffff; }
+  .key[aria-pressed="true"] .dot.waf { background: #a1a1aa; border-color: rgba(255,255,255,.4); }
+  .key[aria-pressed="true"] .dot.dead { background: #e4e4e7; border-color: rgba(255,255,255,.5); }
+  .dot { width: 9px; height: 9px; border-radius: 50%; flex-shrink: 0; }
+  .dot.exposed { background: var(--ink); }
+  .dot.waf { background: var(--waf); }
+  .dot.dead { background: var(--dead); border: 1px solid rgba(0,0,0,.18); }
+  .dot.new { background: transparent; border: 2px solid currentColor; width: 10px; height: 10px; }
   .key .num { font-weight: 500; }
   .key small { color: var(--muted); font-size: 13px; }
-  .key[aria-pressed="true"] small { color: #d2d2d7; }
+  .key[aria-pressed="true"] small { color: #d4d4d8; }
 
-  .tools { position: sticky; top: 0; z-index: 2; display: flex; flex-wrap: wrap; align-items: center; gap: 8px; padding: 16px 0; margin-top: 24px; background: linear-gradient(var(--page) 80%, transparent); }
-  .search { flex: 1 1 260px; height: 40px; padding: 0 18px; border-radius: 999px; border: 1px solid var(--line-strong); background: var(--card); }
-  .chip { height: 40px; padding: 0 16px; border-radius: 999px; border: 1px solid var(--line); background: var(--card); cursor: pointer; }
-  .chip[aria-pressed="true"] { background: var(--ink); color: #fff; border-color: var(--ink); }
+  .tools { position: sticky; top: 0; z-index: 2; display: flex; flex-wrap: wrap; align-items: center; gap: 8px; padding: 14px 0; margin-top: 16px; background: linear-gradient(var(--page) 82%, rgba(245,245,247,0)); }
+  .search { flex: 1 1 240px; height: 38px; padding: 0 16px; border-radius: 999px; border: 1px solid var(--line-strong); background: var(--card); }
+  .search::placeholder { color: var(--faint); }
+  .chip { height: 38px; padding: 0 14px; border-radius: 999px; border: 1px solid var(--line); background: var(--card); cursor: pointer; display: inline-flex; align-items: center; gap: 6px; white-space: nowrap; transition: border-color .15s ease, background-color .15s ease, color .15s ease; }
+  .chip:hover { border-color: var(--line-strong); }
+  .chip[aria-pressed="true"], select.chip[data-active="true"] { background: var(--ink); color: #ffffff; border-color: var(--ink); }
   select.chip { padding-right: 12px; }
-  .count { margin-left: auto; color: var(--muted); font-size: 13px; }
+  .chip.ghost { background: var(--well); color: var(--muted); }
+  .chip.ghost:hover { color: var(--ink); }
+  .tools-right { margin-left: auto; display: flex; align-items: center; gap: 8px; }
+  .count { color: var(--muted); font-size: 13px; white-space: nowrap; }
 
-  .table-card { background: var(--card); border: 1px solid var(--line); border-radius: 24px; overflow: hidden; }
+  .table-card { background: var(--card); border: 1px solid var(--line); border-radius: 20px; overflow: hidden; box-shadow: 0 1px 2px rgba(0,0,0,.02); }
   .scroll { overflow-x: auto; }
   table { width: 100%; border-collapse: collapse; }
-  th { text-align: left; font-weight: 500; color: var(--muted); font-size: 12.5px; padding: 14px 16px; border-bottom: 1px solid var(--line); white-space: nowrap; background: var(--well); }
-  th button { all: unset; cursor: pointer; }
-  th button:focus-visible { outline: 2px solid var(--ink); outline-offset: 2px; }
-  th[aria-sort="ascending"] button::after { content: " ↑"; } th[aria-sort="descending"] button::after { content: " ↓"; }
-  td { padding: 12px 16px; border-bottom: 1px solid var(--line); vertical-align: top; }
-  tr.row { cursor: pointer; } tr.row:hover td { background: var(--well); }
+  th { text-align: left; font-weight: 500; color: var(--muted); font-size: 12.5px; padding: 12px 16px; border-bottom: 1px solid var(--line); white-space: nowrap; background: var(--well); }
+  th button { all: unset; cursor: pointer; display: inline-flex; align-items: center; gap: 4px; color: inherit; font: inherit; }
+  th button:hover { color: var(--ink); }
+  th button:focus-visible { outline: 2px solid var(--ink); outline-offset: 2px; border-radius: 4px; }
+  th[data-sort] button::after { content: "↕"; opacity: .45; font-size: 11px; }
+  th[aria-sort="ascending"] { color: var(--ink); }
+  th[aria-sort="ascending"] button::after { content: "↑"; opacity: 1; }
+  th[aria-sort="descending"] { color: var(--ink); }
+  th[aria-sort="descending"] button::after { content: "↓"; opacity: 1; }
+  td { padding: 11px 16px; border-bottom: 1px solid var(--line); vertical-align: top; }
+  tr.row { cursor: pointer; }
+  tr.row:hover td { background: var(--well); }
   tr.row.dead td { color: var(--faint); }
-  .host { font-weight: 500; white-space: nowrap; } .host .rest { color: var(--faint); font-weight: 400; }
-  .badge { display: inline-block; margin-left: 8px; padding: 1px 8px; border-radius: 999px; border: 1px solid var(--ink); font-size: 11px; font-weight: 500; vertical-align: 1px; }
-  .title { max-width: 320px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-  .pills { display: flex; flex-wrap: wrap; gap: 4px; max-width: 340px; }
-  .pill { padding: 2px 9px; border-radius: 999px; background: #f0f0f2; font-size: 12px; white-space: nowrap; }
+  .host-cell { display: flex; align-items: baseline; gap: 6px; white-space: nowrap; }
+  .chev { display: inline-block; width: 12px; color: var(--faint); font-size: 11px; transition: transform .15s ease; user-select: none; flex-shrink: 0; }
+  tr.row[aria-expanded="true"] .chev { transform: rotate(90deg); color: var(--ink); }
+  .host { font-weight: 500; }
+  .host .rest { color: var(--faint); font-weight: 400; }
+  .badge { display: inline-block; margin-left: 6px; padding: 1px 8px; border-radius: 999px; border: 1px solid var(--ink); color: var(--ink); font-size: 11px; font-weight: 500; vertical-align: 1px; }
+  .ext-link { display: inline-flex; align-items: center; justify-content: center; width: 20px; height: 20px; border-radius: 6px; color: var(--faint); text-decoration: none; vertical-align: middle; margin-left: 2px; }
+  .ext-link:hover { color: var(--ink); background: rgba(0,0,0,.06); }
+  .title { max-width: 300px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .pills { display: flex; flex-wrap: wrap; gap: 4px; max-width: 320px; }
+  .pill { padding: 2px 9px; border-radius: 999px; background: #ededf0; color: var(--ink); font-size: 12px; white-space: nowrap; border: 1px solid transparent; }
+  button.pill { cursor: pointer; }
+  button.pill:hover { border-color: var(--line-strong); background: #e4e4e9; }
+  .pill.more { background: var(--well); color: var(--muted); border-color: var(--line); }
   .ips { font-size: 12.5px; color: var(--muted); max-width: 200px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-  tr.detail td { background: var(--well); padding: 0 16px; }
-  .detail-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 14px 28px; padding: 18px 0 22px; }
-  .detail-grid dt { color: var(--muted); font-size: 12px; } .detail-grid dd { margin: 2px 0 0; overflow-wrap: anywhere; }
-  .detail-grid a { color: var(--ink); }
-  .empty { padding: 56px 24px; text-align: center; color: var(--muted); }
-  footer { margin-top: 32px; color: var(--faint); font-size: 12.5px; }
+  tr.detail td { background: var(--well); padding: 0 16px 0 34px; }
+  .detail-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(190px, 1fr)); gap: 14px 24px; padding: 16px 0 20px; margin: 0; }
+  .detail-grid dt { color: var(--muted); font-size: 12px; font-weight: 500; }
+  .detail-grid dd { margin: 3px 0 0; overflow-wrap: anywhere; }
+  .empty { padding: 48px 24px; text-align: center; color: var(--muted); display: flex; flex-direction: column; align-items: center; gap: 12px; }
+  .empty[hidden] { display: none; }
+  footer { margin-top: 24px; color: var(--faint); font-size: 12.5px; display: flex; justify-content: space-between; flex-wrap: wrap; gap: 8px; }
 
-  @media (max-width: 720px) { .wrap { padding: 24px 14px 60px; } .surface { padding: 20px; border-radius: 22px; } .count { width: 100%; margin: 0; } }
-  @media (prefers-reduced-motion: reduce) { .seg { transition: none; } }
+  @media (max-width: 720px) {
+    .wrap { padding: 18px 14px 48px; }
+    .surface { padding: 16px; border-radius: 16px; }
+    .tools-right { width: 100%; justify-content: space-between; margin-left: 0; }
+  }
+  @media (prefers-reduced-motion: reduce) { .seg, .key, .chip, .chev { transition: none; } }
 </style>
 </head>
 <body>
@@ -88,42 +121,52 @@
       <div class="seg exposed" id="seg-exposed"></div><div class="seg waf" id="seg-waf"></div><div class="seg dead" id="seg-dead"></div>
     </div>
     <div class="legend">
-      <button class="key" data-key="exposed" aria-pressed="false"><span class="dot exposed"></span><span class="num" id="n-exposed"></span><small>reachable, no WAF</small></button>
-      <button class="key" data-key="waf" aria-pressed="false"><span class="dot waf"></span><span class="num" id="n-waf"></span><small>behind WAF</small></button>
-      <button class="key" data-key="dead" aria-pressed="false"><span class="dot dead"></span><span class="num" id="n-dead"></span><small>no response</small></button>
-      <button class="key" data-key="new" aria-pressed="false"><span class="dot new"></span><span class="num" id="n-new"></span><small>new this scan</small></button>
+      <button class="key" type="button" data-key="exposed" aria-pressed="false"><span class="dot exposed"></span><span class="num" id="n-exposed"></span><small>reachable, no WAF</small></button>
+      <button class="key" type="button" data-key="waf" aria-pressed="false"><span class="dot waf"></span><span class="num" id="n-waf"></span><small>behind WAF</small></button>
+      <button class="key" type="button" data-key="dead" aria-pressed="false"><span class="dot dead"></span><span class="num" id="n-dead"></span><small>no response</small></button>
+      <button class="key" type="button" data-key="new" aria-pressed="false"><span class="dot new"></span><span class="num" id="n-new"></span><small>new this scan</small></button>
     </div>
   </section>
 
   <div class="tools">
-    <input class="search" id="q" type="search" placeholder="Search host, title, tech, IP" aria-label="Search">
-    <button class="chip" data-status="2" aria-pressed="false">2xx</button>
-    <button class="chip" data-status="3" aria-pressed="false">3xx</button>
-    <button class="chip" data-status="4" aria-pressed="false">4xx</button>
-    <button class="chip" data-status="5" aria-pressed="false">5xx</button>
-    <select class="chip" id="tech" aria-label="Technology"><option value="">Any tech</option></select>
-    <select class="chip" id="root" aria-label="Root domain" hidden><option value="">All roots</option></select>
-    <span class="count num" id="count" aria-live="polite"></span>
+    <input class="search" id="q" type="search" placeholder="Search host, title, tech, IP (press /)" aria-label="Search hosts">
+    <button class="chip" type="button" data-status="2" aria-pressed="false">2xx</button>
+    <button class="chip" type="button" data-status="3" aria-pressed="false">3xx</button>
+    <button class="chip" type="button" data-status="4" aria-pressed="false">4xx</button>
+    <button class="chip" type="button" data-status="5" aria-pressed="false">5xx</button>
+    <select class="chip" id="tech" aria-label="Technology" data-active="false"><option value="">Any tech</option></select>
+    <select class="chip" id="root" aria-label="Root domain" data-active="false" hidden><option value="">All roots</option></select>
+    <button class="chip ghost" type="button" id="reset" hidden>Reset filters</button>
+    <div class="tools-right">
+      <span class="count num" id="count" aria-live="polite"></span>
+      <button class="chip" type="button" id="copy-hosts" title="Copy matching hostnames to clipboard">Copy hosts</button>
+    </div>
   </div>
 
   <div class="table-card">
     <div class="scroll">
       <table>
         <thead><tr>
-          <th data-sort="host"><button>Host</button></th>
-          <th data-sort="status"><button>Status</button></th>
-          <th data-sort="title"><button>Title</button></th>
+          <th data-sort="host"><button type="button">Host</button></th>
+          <th data-sort="status"><button type="button">Status</button></th>
+          <th data-sort="title"><button type="button">Title</button></th>
           <th>Tech</th>
-          <th data-sort="waf"><button>WAF</button></th>
-          <th data-sort="ips"><button>IP</button></th>
-          <th data-sort="depth"><button>Depth</button></th>
+          <th data-sort="waf"><button type="button">WAF</button></th>
+          <th data-sort="ips"><button type="button">IP</button></th>
+          <th data-sort="depth"><button type="button">Depth</button></th>
         </tr></thead>
         <tbody id="rows"></tbody>
       </table>
     </div>
-    <div class="empty" id="empty" hidden>No hosts match these filters. Clear the search or switch a filter off.</div>
+    <div class="empty" id="empty" hidden>
+      <span>No hosts match the active filters.</span>
+      <button class="chip" type="button" id="empty-reset">Reset all filters</button>
+    </div>
   </div>
-  <footer>Passive enumeration by subfinder, probing by httpx. Click a row for details.</footer>
+  <footer>
+    <span>Passive enumeration by subfinder, probing by httpx.</span>
+    <span>Click any row to inspect telemetry · Press <kbd class="num">/</kbd> to search</span>
+  </footer>
 </div>
 
 <script>
@@ -131,12 +174,63 @@ const DATA = {{ .DataJSON }};
 (() => {
   const $ = (id) => document.getElementById(id);
   const fmt = new Intl.NumberFormat();
-  const hosts = DATA.hosts;
-  const state = { q: "", key: "", status: new Set(), tech: "", root: "", sort: "depth", dir: 1, open: null };
+  const hosts = DATA.hosts || [];
+  const rootsData = DATA.roots || [];
+  const state = { q: "", key: "", status: new Set(), tech: "", root: "", sort: "depth", dir: 1, open: new Set() };
+  let currentList = [];
 
-  
-  const el = (tag, cls, text) => { const e = document.createElement(tag); if (cls) e.className = cls; if (text != null) e.textContent = text; return e; };
+  const el = (tag, cls, text) => {
+    const e = document.createElement(tag);
+    if (cls) e.className = cls;
+    if (text != null) e.textContent = text;
+    return e;
+  };
+  const svgNS = "http://www.w3.org/2000/svg";
   const kind = (h) => !h.alive ? "dead" : h.waf ? "waf" : "exposed";
+  const rank = (h) => !h.alive ? 2 : h.waf ? 1 : 0;
+
+  hosts.forEach(h => {
+    h.tech = h.tech || [];
+    h._text = [h.host, h.title, h.tech.join(" "), h.ips, h.waf, h.server].join(" ").toLowerCase();
+  });
+
+  function makeClockIcon() {
+    const svg = document.createElementNS(svgNS, "svg");
+    svg.setAttribute("width", "12");
+    svg.setAttribute("height", "12");
+    svg.setAttribute("viewBox", "0 0 24 24");
+    svg.setAttribute("fill", "none");
+    svg.setAttribute("stroke", "currentColor");
+    svg.setAttribute("stroke-width", "2");
+    svg.setAttribute("stroke-linecap", "round");
+    svg.setAttribute("stroke-linejoin", "round");
+    svg.setAttribute("aria-hidden", "true");
+    const circle = document.createElementNS(svgNS, "circle");
+    circle.setAttribute("cx", "12");
+    circle.setAttribute("cy", "12");
+    circle.setAttribute("r", "10");
+    const poly = document.createElementNS(svgNS, "polyline");
+    poly.setAttribute("points", "12 6 12 12 16 14");
+    svg.append(circle, poly);
+    return svg;
+  }
+
+  function makeExtIcon() {
+    const svg = document.createElementNS(svgNS, "svg");
+    svg.setAttribute("width", "12");
+    svg.setAttribute("height", "12");
+    svg.setAttribute("viewBox", "0 0 24 24");
+    svg.setAttribute("fill", "none");
+    svg.setAttribute("stroke", "currentColor");
+    svg.setAttribute("stroke-width", "2");
+    svg.setAttribute("stroke-linecap", "round");
+    svg.setAttribute("stroke-linejoin", "round");
+    svg.setAttribute("aria-hidden", "true");
+    const path = document.createElementNS(svgNS, "path");
+    path.setAttribute("d", "M7 17L17 7M9 7h8v8");
+    svg.append(path);
+    return svg;
+  }
 
   function fmtSec(sec) {
     sec = Math.round(sec);
@@ -150,7 +244,7 @@ const DATA = {{ .DataJSON }};
   }
 
   function updateSubtitle() {
-    const targetRoot = state.root ? DATA.roots.find(r => r.root === state.root) : (DATA.roots.length === 1 ? DATA.roots[0] : null);
+    const targetRoot = state.root ? rootsData.find(r => r.root === state.root) : (rootsData.length === 1 ? rootsData[0] : null);
     let dur = "";
     let lastDate = "";
 
@@ -158,57 +252,93 @@ const DATA = {{ .DataJSON }};
       dur = targetRoot.duration || "";
       lastDate = targetRoot.last;
     } else {
-      const dates = DATA.roots.map(r => r.last).filter(Boolean).sort();
+      const dates = rootsData.map(r => r.last).filter(Boolean).sort();
       lastDate = dates.pop() || "";
-      const totalSec = DATA.roots.reduce((acc, r) => acc + (r.duration_sec || 0), 0);
-      if (totalSec > 0) {
-        dur = fmtSec(totalSec);
-      }
+      const totalSec = rootsData.reduce((acc, r) => acc + (r.duration_sec || 0), 0);
+      if (totalSec > 0) dur = fmtSec(totalSec);
     }
 
     const hostCount = state.root ? hosts.filter(h => h.root === state.root).length : hosts.length;
     const sub = $("subtitle");
     sub.replaceChildren();
 
-    const countSpan = el("span", "num", fmt.format(hostCount));
-    sub.append(countSpan, document.createTextNode(" subdomains found"));
-
+    sub.append(el("span", "num", fmt.format(hostCount)), document.createTextNode(" subdomains found"));
     if (lastDate) {
       sub.append(document.createTextNode(", last scanned " + new Date(lastDate).toLocaleString()));
     }
-
     if (dur) {
       const badge = el("span", "dur-badge");
-      badge.innerHTML = `<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg><span class="num">${dur}</span>`;
+      badge.append(makeClockIcon(), el("span", "num", dur));
       badge.title = "Total scan elapsed duration";
       sub.append(badge);
     }
   }
 
-  const roots = DATA.roots.map(r => r.root);
+  function updateSurfaceAndTech() {
+    const scoped = state.root ? hosts.filter(h => h.root === state.root) : hosts;
+    const counts = { exposed: 0, waf: 0, dead: 0, new: 0 };
+    const techCount = {};
+
+    scoped.forEach(h => {
+      counts[kind(h)]++;
+      if (h.new) counts.new++;
+      h.tech.forEach(t => { techCount[t] = (techCount[t] || 0) + 1; });
+    });
+
+    ["exposed", "waf", "dead", "new"].forEach(k => {
+      $("n-" + k).textContent = fmt.format(counts[k]);
+    });
+    $("bar").setAttribute("aria-label", `${counts.exposed} reachable without WAF, ${counts.waf} behind WAF, ${counts.dead} no response`);
+
+    const total = scoped.length || 1;
+    ["exposed", "waf", "dead"].forEach(k => {
+      $("seg-" + k).style.width = (counts[k] / total * 100) + "%";
+    });
+
+    const techSel = $("tech");
+    const prevTech = state.tech;
+    techSel.replaceChildren(new Option("Any tech", ""));
+    Object.entries(techCount)
+      .sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0]))
+      .forEach(([t, n]) => techSel.append(new Option(`${t} (${n})`, t)));
+
+    if (prevTech && techCount[prevTech]) {
+      techSel.value = prevTech;
+    } else {
+      state.tech = "";
+      techSel.value = "";
+    }
+    techSel.dataset.active = String(Boolean(state.tech));
+  }
+
+  const roots = rootsData.map(r => r.root);
   $("title").textContent = roots.length === 1 ? roots[0] : roots.length + " root domains";
-  updateSubtitle();
   $("generated").textContent = "Report " + new Date(DATA.generated).toLocaleString();
   if (roots.length > 1) {
     $("root").hidden = false;
     roots.forEach(r => $("root").append(new Option(r, r)));
   }
 
-  const counts = { exposed: 0, waf: 0, dead: 0, new: 0 };
-  const techCount = {};
-  hosts.forEach(h => {
-    counts[kind(h)]++; if (h.new) counts.new++;
-    h.tech.forEach(t => techCount[t] = (techCount[t] || 0) + 1);
-    h._text = [h.host, h.title, h.tech.join(" "), h.ips, h.waf, h.server].join(" ").toLowerCase();
-  });
-  ["exposed", "waf", "dead", "new"].forEach(k => $("n-" + k).textContent = fmt.format(counts[k]));
-  $("bar").setAttribute("aria-label", `${counts.exposed} reachable without WAF, ${counts.waf} behind WAF, ${counts.dead} no response`);
-  requestAnimationFrame(() => requestAnimationFrame(() => {
-    const total = hosts.length || 1;
-    ["exposed", "waf", "dead"].forEach(k => $("seg-" + k).style.width = (counts[k] / total * 100) + "%");
-  }));
-  Object.entries(techCount).sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0]))
-    .forEach(([t, n]) => $("tech").append(new Option(`${t} (${n})`, t)));
+  updateSubtitle();
+  requestAnimationFrame(() => updateSurfaceAndTech());
+
+  function hasActiveFilters() {
+    return Boolean(state.q || state.key || state.status.size || state.tech || state.root);
+  }
+
+  function syncFilterControls() {
+    document.querySelectorAll(".key").forEach(k => {
+      k.setAttribute("aria-pressed", String(k.dataset.key === state.key));
+    });
+    document.querySelectorAll("[data-status]").forEach(b => {
+      b.setAttribute("aria-pressed", String(state.status.has(b.dataset.status)));
+    });
+    $("tech").value = state.tech;
+    $("tech").dataset.active = String(Boolean(state.tech));
+    $("root").value = state.root;
+    $("root").dataset.active = String(Boolean(state.root));
+    $("reset").hidden = !hasActiveFilters();
+  }
 
   function matches(h) {
     if (state.root && h.root !== state.root) return false;
@@ -220,72 +350,266 @@ const DATA = {{ .DataJSON }};
 
   function cmp(a, b) {
     const k = state.sort;
-    let x = a[k], y = b[k];
-    if (k === "status") { x = a.alive ? a.status : 999; y = b.alive ? b.status : 999; }
+    if (k === "depth") {
+      if (a.alive !== b.alive) return a.alive ? -1 : 1;
+      const d = (a.depth - b.depth) * state.dir;
+      if (d !== 0) return d;
+      if (rank(a) !== rank(b)) return rank(a) - rank(b);
+      return a.host.localeCompare(b.host);
+    }
+    if (k === "status") {
+      const x = a.alive ? a.status : 999;
+      const y = b.alive ? b.status : 999;
+      return ((x - y) || a.host.localeCompare(b.host)) * state.dir;
+    }
+    if (k === "waf") {
+      const catA = a.waf ? 0 : a.alive ? 1 : 2;
+      const catB = b.waf ? 0 : b.alive ? 1 : 2;
+      if (catA !== catB) return (catA - catB) * state.dir;
+      return (String(a.waf).localeCompare(String(b.waf)) || a.host.localeCompare(b.host)) * state.dir;
+    }
+    if (k === "ips") {
+      if (Boolean(a.ips) !== Boolean(b.ips)) return a.ips ? -1 : 1;
+      return (String(a.ips).localeCompare(String(b.ips), undefined, { numeric: true }) || a.host.localeCompare(b.host)) * state.dir;
+    }
+    const x = a[k], y = b[k];
     const r = typeof x === "number" ? x - y : String(x).localeCompare(String(y));
     return (r || a.host.localeCompare(b.host)) * state.dir;
   }
 
   function detail(h) {
-    const tr = el("tr", "detail"), td = el("td"); td.colSpan = 7;
+    const tr = el("tr", "detail"), td = el("td");
+    td.colSpan = 7;
     const dl = el("dl", "detail-grid");
-    const add = (k, v) => { if (!v && v !== 0) return; const d = el("div"); d.append(el("dt", null, k)); const dd = el("dd"); typeof v === "string" ? dd.textContent = v : dd.append(v); d.append(dd); dl.append(d); };
-    if (/^https?:\/\//i.test(h.url)) { const a = el("a", null, h.url); a.href = h.url; a.target = "_blank"; a.rel = "noopener noreferrer"; add("URL", a); }
-    add("Server", h.server); add("CDN", h.cdn); add("WAF", h.waf || "none detected");
-    add("IPs", h.ips); add("Content length", h.alive ? fmt.format(h.length) + " bytes" : "");
-    add("Sources", h.sources.split(",").join(", ")); add("First seen", new Date(h.first_seen).toLocaleString());
-    add("Last seen", new Date(h.last_seen).toLocaleString());
-    td.append(dl); tr.append(td); return tr;
+    const add = (k, v, cls) => {
+      if (!v && v !== 0) return;
+      const d = el("div");
+      d.append(el("dt", null, k));
+      const dd = el("dd", cls);
+      typeof v === "string" ? dd.textContent = v : dd.append(v);
+      d.append(dd);
+      dl.append(d);
+    };
+    if (/^https?:\/\//i.test(h.url)) {
+      const a = el("a", "num", h.url);
+      a.href = h.url;
+      a.target = "_blank";
+      a.rel = "noopener noreferrer";
+      add("URL", a);
+    }
+    add("Probe status", h.alive ? `HTTP ${h.status}` : "No HTTP response", h.alive ? "num" : null);
+    add("Server", h.server);
+    add("CDN", h.cdn);
+    if (h.alive || h.waf) add("WAF", h.waf || "none detected");
+    if (h.tech.length > 0) add("Technologies", h.tech.join(", "));
+    add("IPs", h.ips, "num");
+    add("Content length", h.alive ? fmt.format(h.length) + " bytes" : "", "num");
+    add("Sources", h.sources ? h.sources.split(",").join(", ") : "");
+    if (h.first_seen) add("First seen", new Date(h.first_seen).toLocaleString(), "num");
+    if (h.last_seen) add("Last seen", new Date(h.last_seen).toLocaleString(), "num");
+    td.append(dl);
+    tr.append(td);
+    return tr;
+  }
+
+  function toggleRow(tr, h) {
+    const isOpen = state.open.has(h.host);
+    if (isOpen) {
+      state.open.delete(h.host);
+      tr.setAttribute("aria-expanded", "false");
+      if (tr.nextElementSibling && tr.nextElementSibling.classList.contains("detail")) {
+        tr.nextElementSibling.remove();
+      }
+    } else {
+      state.open.add(h.host);
+      tr.setAttribute("aria-expanded", "true");
+      tr.after(detail(h));
+    }
   }
 
   function render() {
-    const list = hosts.filter(matches).sort(cmp);
-    const body = $("rows"); body.replaceChildren();
+    syncFilterControls();
+    currentList = hosts.filter(matches).sort(cmp);
+    const body = $("rows");
+    body.replaceChildren();
     const frag = document.createDocumentFragment();
-    list.forEach(h => {
-      const tr = el("tr", "row" + (h.alive ? "" : " dead")); tr.tabIndex = 0;
-      tr.setAttribute("aria-expanded", state.open === h.host);
-      const host = el("td", "host");
+
+    currentList.forEach(h => {
+      const isOpen = state.open.has(h.host);
+      const tr = el("tr", "row" + (h.alive ? "" : " dead"));
+      tr.tabIndex = 0;
+      tr.setAttribute("aria-expanded", String(isOpen));
+
+      const hostTd = el("td");
+      const hostWrap = el("div", "host-cell");
+      const chev = el("span", "chev", "▸");
+      chev.setAttribute("aria-hidden", "true");
+      const hostText = el("span", "host");
       const prefix = h.host === h.root ? h.host : h.host.slice(0, -(h.root.length + 1));
-      host.append(el("span", null, prefix));
-      if (h.host !== h.root) host.append(el("span", "rest", "." + h.root));
-      if (h.new) host.append(el("span", "badge", "new"));
-      const pills = el("div", "pills"); h.tech.forEach(t => pills.append(el("span", "pill", t)));
-      const techTd = el("td"); techTd.append(pills);
-      tr.append(host, el("td", "num", h.alive ? h.status : "–"), el("td", "title", h.title), techTd,
-        el("td", null, h.waf || (h.alive ? "none" : "")), el("td", "ips num", h.ips), el("td", "num", h.depth));
-      tr.querySelector(".title").title = h.title;
-      const toggle = () => { state.open = state.open === h.host ? null : h.host; render(); };
-      tr.addEventListener("click", toggle);
-      tr.addEventListener("keydown", e => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); toggle(); } });
+      hostText.append(el("span", null, prefix));
+      if (h.host !== h.root) hostText.append(el("span", "rest", "." + h.root));
+      if (h.new) hostText.append(el("span", "badge", "new"));
+      hostWrap.append(chev, hostText);
+
+      if (h.alive && /^https?:\/\//i.test(h.url)) {
+        const ext = el("a", "ext-link");
+        ext.href = h.url;
+        ext.target = "_blank";
+        ext.rel = "noopener noreferrer";
+        ext.title = "Open " + h.url + " in new tab";
+        ext.setAttribute("aria-label", "Open " + h.host + " in new tab");
+        ext.append(makeExtIcon());
+        hostWrap.append(ext);
+      }
+      hostTd.append(hostWrap);
+
+      const pills = el("div", "pills");
+      const maxPills = 3;
+      h.tech.slice(0, maxPills).forEach(t => {
+        const btn = el("button", "pill", t);
+        btn.type = "button";
+        btn.title = "Filter by " + t;
+        btn.addEventListener("click", (e) => {
+          e.stopPropagation();
+          state.tech = state.tech === t ? "" : t;
+          render();
+        });
+        pills.append(btn);
+      });
+      if (h.tech.length > maxPills) {
+        pills.append(el("span", "pill more num", "+" + (h.tech.length - maxPills)));
+      }
+      const techTd = el("td");
+      techTd.append(pills);
+
+      const titleTd = el("td", "title", h.title || "");
+      if (h.title) titleTd.title = h.title;
+
+      const wafTd = el("td");
+      if (h.waf) {
+        wafTd.textContent = h.waf;
+      } else {
+        wafTd.append(el("span", "faint", "–"));
+      }
+
+      const ipsTd = el("td", "ips num", h.ips || "");
+      if (h.ips) ipsTd.title = h.ips;
+
+      tr.append(
+        hostTd,
+        el("td", "num", h.alive ? h.status : "–"),
+        titleTd,
+        techTd,
+        wafTd,
+        ipsTd,
+        el("td", "num", h.depth)
+      );
+
+      tr.addEventListener("click", (e) => {
+        if (e.target.closest("a, button")) return;
+        const sel = window.getSelection ? String(window.getSelection()).trim() : "";
+        if (sel.length > 0) return;
+        toggleRow(tr, h);
+      });
+      tr.addEventListener("keydown", (e) => {
+        if (e.target !== tr) return;
+        if (e.key === "Enter" || e.key === " ") {
+          e.preventDefault();
+          toggleRow(tr, h);
+        }
+      });
+
       frag.append(tr);
-      if (state.open === h.host) frag.append(detail(h));
+      if (isOpen) frag.append(detail(h));
     });
+
     body.append(frag);
-    $("empty").hidden = list.length > 0;
-    $("count").textContent = `${fmt.format(list.length)} of ${fmt.format(hosts.length)}`;
-    document.querySelectorAll("th[data-sort]").forEach(th =>
-      th.setAttribute("aria-sort", th.dataset.sort === state.sort ? (state.dir > 0 ? "ascending" : "descending") : "none"));
+    $("empty").hidden = currentList.length > 0;
+    $("count").textContent = `${fmt.format(currentList.length)} of ${fmt.format(hosts.length)}`;
+    $("copy-hosts").disabled = currentList.length === 0;
+    document.querySelectorAll("th[data-sort]").forEach(th => {
+      th.setAttribute("aria-sort", th.dataset.sort === state.sort ? (state.dir > 0 ? "ascending" : "descending") : "none");
+    });
+  }
+
+  function resetAllFilters() {
+    state.q = "";
+    state.key = "";
+    state.status.clear();
+    state.tech = "";
+    if ( state.root ) {
+      state.root = "";
+      updateSubtitle();
+      updateSurfaceAndTech();
+    }
+    $("q").value = "";
+    render();
   }
 
   $("q").addEventListener("input", e => { state.q = e.target.value.trim().toLowerCase(); render(); });
   $("tech").addEventListener("change", e => { state.tech = e.target.value; render(); });
-  $("root").addEventListener("change", e => { state.root = e.target.value; updateSubtitle(); render(); });
+  $("root").addEventListener("change", e => {
+    state.root = e.target.value;
+    updateSubtitle();
+    updateSurfaceAndTech();
+    render();
+  });
+  $("reset").addEventListener("click", resetAllFilters);
+  $("empty-reset").addEventListener("click", resetAllFilters);
+
+  $("copy-hosts").addEventListener("click", async () => {
+    if (!currentList.length) return;
+    const text = currentList.map(h => h.host).join("\n");
+    const btn = $("copy-hosts");
+    try {
+      await navigator.clipboard.writeText(text);
+      btn.textContent = `Copied ${fmt.format(currentList.length)}`;
+      setTimeout(() => { btn.textContent = "Copy hosts"; }, 1600);
+    } catch (_) {
+      btn.textContent = "Copy failed";
+      setTimeout(() => { btn.textContent = "Copy hosts"; }, 1600);
+    }
+  });
+
   document.querySelectorAll(".key").forEach(b => b.addEventListener("click", () => {
     state.key = state.key === b.dataset.key ? "" : b.dataset.key;
-    document.querySelectorAll(".key").forEach(k => k.setAttribute("aria-pressed", k.dataset.key === state.key));
+    if (state.key === "dead") state.status.clear();
     render();
   }));
+
   document.querySelectorAll("[data-status]").forEach(b => b.addEventListener("click", () => {
     const s = b.dataset.status;
     state.status.has(s) ? state.status.delete(s) : state.status.add(s);
-    b.setAttribute("aria-pressed", state.status.has(s));
+    if (state.status.size > 0 && state.key === "dead") state.key = "";
     render();
   }));
+
   document.querySelectorAll("th[data-sort] button").forEach(b => b.addEventListener("click", () => {
     const k = b.parentElement.dataset.sort;
-    state.dir = state.sort === k ? -state.dir : 1; state.sort = k; render();
+    state.dir = state.sort === k ? -state.dir : 1;
+    state.sort = k;
+    render();
   }));
+
+  document.addEventListener("keydown", (e) => {
+    if (e.key === "/" && !e.metaKey && !e.ctrlKey && !e.altKey) {
+      const tag = document.activeElement ? document.activeElement.tagName : "";
+      if (tag !== "INPUT" && tag !== "TEXTAREA" && tag !== "SELECT") {
+        e.preventDefault();
+        $("q").focus();
+        $("q").select();
+      }
+    } else if (e.key === "Escape" && document.activeElement === $("q")) {
+      if ($("q").value) {
+        $("q").value = "";
+        state.q = "";
+        render();
+      } else {
+        $("q").blur();
+      }
+    }
+  });
+
   render();
 })();
 </script>

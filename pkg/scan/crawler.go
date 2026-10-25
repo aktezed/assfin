@@ -19,15 +19,6 @@ type CrawlOpts struct {
 	Exclude  []string // hosts or suffixes to drop
 }
 
-// hubPrefixes are common environment/infrastructure subdomain labels worth recursing into on large domains.
-var hubPrefixes = map[string]bool{
-	"api": true, "dev": true, "stg": true, "stage": true, "staging": true,
-	"prod": true, "corp": true, "internal": true, "int": true, "test": true,
-	"uat": true, "qa": true, "admin": true, "auth": true, "sso": true,
-	"vpn": true, "cloud": true, "k8s": true, "app": true, "portal": true,
-	"beta": true, "sandbox": true,
-}
-
 // Crawl queries root, then newly found subdomains level by level until nothing new
 // appears or a cap is hit. onFound is called once per new host (never for root) and is serialized.
 func Crawl(ctx context.Context, root string, o CrawlOpts, enum EnumFunc, onFound func(host string, sources []string)) error {
@@ -110,11 +101,6 @@ func Crawl(ctx context.Context, root string, o CrawlOpts, enum EnumFunc, onFound
 		if err := ctx.Err(); err != nil {
 			return err
 		}
-		// Smart branch pruning: when a round yields >15 subdomains, avoid querying hundreds of flat leaf hosts
-		// that would stall for minutes and trigger HTTP 429 on free OSINT providers.
-		if (o.Depth < 0 || round < o.Depth) && len(next) > 15 {
-			next = pruneBranches(next, seen, root)
-		}
 		log.Printf("round %d: %d newqueued, %d total hosts", round, len(next), len(seen))
 		level = next
 	}
@@ -132,32 +118,11 @@ func parentBranches(host, base string) []string {
 	if len(parts) <= 1 {
 		return nil
 	}
-	var out []string
+	out := make([]string, 0, len(parts)-1)
 	for i := 1; i < len(parts); i++ {
 		out = append(out, strings.Join(parts[i:], ".")+suffix)
 	}
 	return out
-}
-
-// pruneBranches filters large candidate lists down to confirmed parent branches and high-value environment hubs.
-func pruneBranches(candidates []string, seen map[string]bool, root string) []string {
-	hasChild := make(map[string]bool, len(candidates))
-	for h := range seen {
-		for _, p := range parentBranches(h, root) {
-			hasChild[p] = true
-		}
-	}
-	var kept []string
-	for _, c := range candidates {
-		firstLabel := c
-		if idx := strings.IndexByte(c, '.'); idx > 0 {
-			firstLabel = c[:idx]
-		}
-		if hasChild[c] || hubPrefixes[firstLabel] {
-			kept = append(kept, c)
-		}
-	}
-	return kept
 }
 
 // Normalize sanitizes and standardizes a domain name.

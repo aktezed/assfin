@@ -109,9 +109,8 @@ func TestLabelDepth(t *testing.T) {
 	}
 }
 
-func TestSmartBranchPruning(t *testing.T) {
-	// Generate >15 flat leaf hosts plus 1 hub ("dev.a.com") and 1 deep host ("leaf.branch.a.com")
-	var round0 []string
+func TestCrawlAllBranches(t *testing.T) {
+	round0 := make([]string, 0, 22)
 	for i := 1; i <= 20; i++ {
 		round0 = append(round0, "host"+string(rune('a'+i-1))+".a.com")
 	}
@@ -119,24 +118,26 @@ func TestSmartBranchPruning(t *testing.T) {
 
 	largeTree := map[string][]string{
 		"a.com":        round0,
+		"hosta.a.com":  {"sub.hosta.a.com"},
 		"dev.a.com":    {"sub.dev.a.com"},
 		"branch.a.com": {"other.branch.a.com"},
 	}
 	calls := map[string]int{}
-	var found []string
-	if err := Crawl(context.Background(), "a.com", CrawlOpts{Depth: 1, Conc: 5}, fakeEnum(largeTree, calls), func(h string, _ []string) {
-		found = append(found, h)
-	}); err != nil {
+	found := []string{}
+	err := Crawl(
+		context.Background(),
+		"a.com",
+		CrawlOpts{Depth: 1, Conc: 5},
+		fakeEnum(largeTree, calls),
+		func(h string, _ []string) { found = append(found, h) },
+	)
+	if err != nil {
 		t.Fatal(err)
 	}
-	// Should have queried root + dev.a.com + branch.a.com + leaf.branch.a.com, NOT the 20 flat leaf hosts!
-	if calls["hosta.a.com"] != 0 {
-		t.Errorf("expected flat leaf hosta.a.com to be pruned, but it was queried")
+	if calls["hosta.a.com"] != 1 || calls["dev.a.com"] != 1 || calls["branch.a.com"] != 1 {
+		t.Errorf("expected all branches including leaf hosts to be queried, got calls=%v", calls)
 	}
-	if calls["dev.a.com"] != 1 || calls["branch.a.com"] != 1 {
-		t.Errorf("expected dev.a.com and branch.a.com to be queried, got calls=%v", calls)
-	}
-	if !slices.Contains(found, "sub.dev.a.com") || !slices.Contains(found, "other.branch.a.com") {
-		t.Errorf("expected deep children to be discovered, got %v", found)
+	if !slices.Contains(found, "sub.hosta.a.com") || !slices.Contains(found, "sub.dev.a.com") || !slices.Contains(found, "other.branch.a.com") {
+		t.Errorf("expected deep children to be discovered across all branches, got %v", found)
 	}
 }

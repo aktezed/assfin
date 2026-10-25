@@ -4,6 +4,7 @@ import (
 	"context"
 	"path/filepath"
 	"testing"
+	"time"
 
 	"github.com/aktezed/assfin/pkg/store"
 	"github.com/aktezed/assfin/pkg/types"
@@ -66,5 +67,24 @@ func TestRunnerQueryAndReport(t *testing.T) {
 	}
 	if oneLineOpts.Command != "scan" {
 		t.Fatalf("expected Command 'scan', got %q", oneLineOpts.Command)
+	}
+}
+
+func TestFormatDuration(t *testing.T) {
+	tests := []struct {
+		d    time.Duration
+		want string
+	}{
+		{d: 400 * time.Millisecond, want: "0.4s"},
+		{d: 5 * time.Second, want: "5s"},
+		{d: 65 * time.Second, want: "1m 5s"},
+		{d: 3665 * time.Second, want: "1h 1m 5s"},
+	}
+
+	for _, tt := range tests {
+		got := formatDuration(tt.d)
+		if got != tt.want {
+			t.Errorf("formatDuration(%v) = %q, want %q", tt.d, got, tt.want)
+		}
 	}
 }

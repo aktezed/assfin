@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"strings"
+	"sync/atomic"
 
 	"github.com/aktezed/assfin/pkg/types"
 	"github.com/aktezed/assfin/pkg/waf"
@@ -13,10 +14,11 @@ import (
 
 // ProbeOpts defines options for HTTP probing with httpx.
 type ProbeOpts struct {
-	Threads int
-	Timeout int
-	Rate    int
-	Follow  bool
+	Threads    int
+	Timeout    int
+	Rate       int
+	Follow     bool
+	OnProgress func(completed, total int)
 }
 
 // Probe runs httpx over hosts; onResult is called for each host that answered HTTP(S).
@@ -24,6 +26,9 @@ func Probe(ctx context.Context, hosts []string, o ProbeOpts, onResult func(host 
 	if len(hosts) == 0 {
 		return nil
 	}
+	var completed atomic.Int64
+	total := len(hosts)
+
 	opts := httpx.Options{
 		Methods:                   "GET",
 		InputTargetHost:           goflags.StringSlice(hosts),
@@ -46,6 +51,13 @@ func Probe(ctx context.Context, hosts []string, o ProbeOpts, onResult func(host 
 		DisableStdout:             true,
 		DisableUpdateCheck:        true,
 		OnResult: func(r httpx.Result) {
+			if o.OnProgress != nil {
+				done := int(completed.Add(1))
+				if done > total {
+					done = total
+				}
+				o.OnProgress(done, total)
+			}
 			if r.Err != nil || r.Failed {
 				return
 			}

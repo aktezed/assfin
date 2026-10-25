@@ -9,7 +9,10 @@ import (
 	"os"
 	"strconv"
 	"strings"
+	"sync"
+	"sync/atomic"
 	"text/tabwriter"
+	"time"
 
 	"github.com/aktezed/assfin/pkg/report"
 	"github.com/aktezed/assfin/pkg/scan"
@@ -87,7 +90,10 @@ func (r *Runner) ExecuteScan(ctx context.Context) error {
 		return fmt.Errorf("subfinder init: %w", err)
 	}
 
+	totalScanStart := time.Now()
+
 	for _, root := range roots {
+		scanStart := time.Now()
 		scanID, err := dbStore.StartScan(root, string(optsJSON))
 		if err != nil {
 			return err
@@ -97,12 +103,15 @@ func (r *Runner) ExecuteScan(ctx context.Context) error {
 		if r.options.Depth >= 0 {
 			depthLabel = strconv.Itoa(r.options.Depth)
 		}
-		gologger.Info().Msgf("enumerating %s (depth %s, passive only)", root, depthLabel)
+		gologger.Info().Msgf("[%s] enumerating subdomains (depth %s, passive only)", root, depthLabel)
 		if err := dbStore.UpsertHost(scanID, root, root, 0, nil); err != nil {
 			return err
 		}
 
-		var dbErr error
+		var (
+			dbErr      error
+			discovered atomic.Int64
+		)
 		crawlOpts := scan.CrawlOpts{
 			Depth:    r.options.Depth,
 			MaxHosts: r.options.MaxHosts,
@@ -110,11 +119,31 @@ func (r *Runner) ExecuteScan(ctx context.Context) error {
 			Exclude:  exclude,
 		}
 
+		enumStart := time.Now()
+		tickerCtx, cancelTicker := context.WithCancel(ctx)
+		go func() {
+			t := time.NewTicker(10 * time.Second)
+			defer t.Stop()
+			for {
+				select {
+				case <-tickerCtx.Done():
+					return
+				case <-t.C:
+					gologger.Info().Msgf("[%s] enumerating... (%s elapsed, %d subdomains found)",
+						root, formatDuration(time.Since(enumStart)), discovered.Load())
+				}
+			}
+		}()
+
 		err = scan.Crawl(ctx, root, crawlOpts, enum, func(h string, sources []string) {
+			discovered.Add(1)
 			if err := dbStore.UpsertHost(scanID, root, h, scan.LabelDepth(h, root), sources); err != nil && dbErr == nil {
 				dbErr = err
 			}
 		})
+		cancelTicker()
+		enumDuration := time.Since(enumStart)
+
 		if dbErr != nil {
 			return dbErr
 		}
@@ -122,6 +151,10 @@ func (r *Runner) ExecuteScan(ctx context.Context) error {
 			return fmt.Errorf("enumeration stopped: %w (partial results saved to %s)", err, dbPath)
 		}
 
+		gologger.Info().Msgf("[%s] enumeration completed: %d hosts discovered in %s",
+			root, discovered.Load(), formatDuration(enumDuration))
+
+		var probeDuration time.Duration
 		if !r.options.NoProbe {
 			probeOpts := scan.ProbeOpts{
 				Threads: r.options.Threads,
@@ -129,7 +162,8 @@ func (r *Runner) ExecuteScan(ctx context.Context) error {
 				Rate:    r.options.RateLimit,
 				Follow:  r.options.FollowRedirects,
 			}
-			if err := r.probeRoot(ctx, dbStore, root, probeOpts); err != nil {
+			probeDuration, err = r.probeRoot(ctx, dbStore, root, probeOpts)
+			if err != nil {
 				return fmt.Errorf("probing stopped: %w (partial results saved to %s)", err, dbPath)
 			}
 		}
@@ -149,7 +183,20 @@ func (r *Runner) ExecuteScan(ctx context.Context) error {
 			wafCount += b2i(h.WAF != "")
 			fresh += b2i(h.New)
 		}
-		gologger.Info().Msgf("%s: %d hosts, %d alive, %d behind WAF, %d new -> %s", root, len(all), alive, wafCount, fresh, dbPath)
+
+		scanDuration := time.Since(scanStart)
+		if r.options.NoProbe {
+			gologger.Info().Msgf("%s: %d hosts, %d new in %s -> %s",
+				root, len(all), fresh, formatDuration(scanDuration), dbPath)
+		} else {
+			gologger.Info().Msgf("%s: %d hosts, %d alive, %d behind WAF, %d new in %s (enum: %s, probe: %s) -> %s",
+				root, len(all), alive, wafCount, fresh, formatDuration(scanDuration),
+				formatDuration(enumDuration), formatDuration(probeDuration), dbPath)
+		}
+	}
+
+	if len(roots) > 1 {
+		gologger.Info().Msgf("all %d domains scanned in %s", len(roots), formatDuration(time.Since(totalScanStart)))
 	}
 
 	if r.options.Report || r.options.ReportOutput != "" {
@@ -166,25 +213,88 @@ func (r *Runner) ExecuteScan(ctx context.Context) error {
 	return nil
 }
 
-func (r *Runner) probeRoot(ctx context.Context, dbStore *store.Store, root string, o scan.ProbeOpts) error {
+func (r *Runner) probeRoot(ctx context.Context, dbStore *store.Store, root string, o scan.ProbeOpts) (time.Duration, error) {
 	known, err := dbStore.QueryHosts(types.Filter{Root: root, Depth: -1})
 	if err != nil {
-		return err
+		return 0, err
 	}
 	if err := dbStore.ResetProbe(root); err != nil {
-		return err
+		return 0, err
 	}
 	hosts := make([]string, len(known))
 	for i, h := range known {
 		hosts[i] = h.Host
 	}
 
+	if len(hosts) == 0 {
+		return 0, nil
+	}
+
 	gologger.Info().Msgf("probing %d hosts (%d req/s, %d threads)", len(hosts), o.Rate, o.Threads)
-	return scan.Probe(ctx, hosts, o, func(host string, p types.Probe) {
+
+	probeStart := time.Now()
+	var (
+		lastUpdate time.Time
+		lastLog    time.Time
+		updateMu   sync.Mutex
+	)
+
+	fi, err := os.Stderr.Stat()
+	isTTY := err == nil && (fi.Mode()&os.ModeCharDevice) != 0
+
+	o.OnProgress = func(completed, total int) {
+		updateMu.Lock()
+		defer updateMu.Unlock()
+
+		now := time.Now()
+		elapsed := now.Sub(probeStart)
+		pct := float64(completed) / float64(total) * 100
+		speed := float64(completed) / elapsed.Seconds()
+
+		var eta string
+		if speed > 0 && completed < total {
+			remSec := float64(total-completed) / speed
+			eta = "~" + formatDuration(time.Duration(remSec*float64(time.Second))) + " remaining"
+		} else {
+			eta = "finishing..."
+		}
+
+		if isTTY {
+			if completed < total && now.Sub(lastUpdate) < 250*time.Millisecond {
+				return
+			}
+			lastUpdate = now
+			fmt.Fprintf(os.Stderr, "\r\033[K[INF] probing %d/%d (%.0f%%) | %s elapsed | %s (%d req/s)",
+				completed, total, pct, formatDuration(elapsed), eta, int(speed))
+		} else {
+			if completed < total && now.Sub(lastLog) < 5*time.Second {
+				return
+			}
+			lastLog = now
+			gologger.Info().Msgf("probing %d/%d (%.0f%%) | %s elapsed | %s",
+				completed, total, pct, formatDuration(elapsed), eta)
+		}
+	}
+
+	err = scan.Probe(ctx, hosts, o, func(host string, p types.Probe) {
 		if err := dbStore.SaveProbe(host, p); err != nil {
 			gologger.Warning().Msgf("save %s: %v", host, err)
 		}
 	})
+
+	probeDuration := time.Since(probeStart)
+	if isTTY {
+		fmt.Fprint(os.Stderr, "\r\033[K")
+	}
+
+	var speed int
+	if probeDuration.Seconds() > 0 {
+		speed = int(float64(len(hosts)) / probeDuration.Seconds())
+	}
+	gologger.Info().Msgf("probing completed: %d hosts probed in %s (%d req/s)",
+		len(hosts), formatDuration(probeDuration), speed)
+
+	return probeDuration, err
 }
 
 // ExecuteQuery queries the database with filtering and outputs results.
@@ -351,4 +461,22 @@ func clip(s string, n int) string {
 		return string(r[:n-1]) + "…"
 	}
 	return s
+}
+
+func formatDuration(d time.Duration) string {
+	if d < time.Second {
+		return fmt.Sprintf("%.1fs", d.Seconds())
+	}
+	d = d.Round(time.Second)
+	h := d / time.Hour
+	m := (d % time.Hour) / time.Minute
+	s := (d % time.Minute) / time.Second
+	switch {
+	case h > 0:
+		return fmt.Sprintf("%dh %dm %ds", h, m, s)
+	case m > 0:
+		return fmt.Sprintf("%dm %ds", m, s)
+	default:
+		return fmt.Sprintf("%ds", s)
+	}
 }

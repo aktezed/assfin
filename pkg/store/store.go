@@ -21,7 +21,7 @@ CREATE TABLE IF NOT EXISTS hosts (
   first_seen TEXT, last_seen TEXT, first_scan INT, last_scan INT,
   alive INT DEFAULT 0, url TEXT DEFAULT '', status INT DEFAULT 0, title TEXT DEFAULT '',
   server TEXT DEFAULT '', tech TEXT DEFAULT '', ips TEXT DEFAULT '', cdn TEXT DEFAULT '',
-  waf TEXT DEFAULT '', length INT DEFAULT 0);
+  waf TEXT DEFAULT '', length INT DEFAULT 0, auth_type TEXT DEFAULT '', auth_url TEXT DEFAULT '');
 CREATE INDEX IF NOT EXISTS idx_scans_root ON scans(root);
 CREATE INDEX IF NOT EXISTS idx_hosts_root_depth ON hosts(root, depth);
 CREATE INDEX IF NOT EXISTS idx_hosts_alive ON hosts(alive);
@@ -29,7 +29,7 @@ CREATE INDEX IF NOT EXISTS idx_hosts_status ON hosts(status);`
 
 const hostCols = `host, root, depth, sources, first_seen, last_seen,
   first_scan = (SELECT max(id) FROM scans s WHERE s.root = hosts.root),
-  alive, url, status, title, server, tech, ips, cdn, waf, length`
+  alive, url, status, title, server, tech, ips, cdn, waf, length, auth_type, auth_url`
 
 // Store handles persistence of scan results and hosts in SQLite.
 type Store struct {
@@ -58,6 +58,10 @@ func New(path string, readOnly bool) (*Store, error) {
 			db.Close()
 			return nil, fmt.Errorf("create schema: %w", err)
 		}
+		// Migrate older databases if columns are missing
+		_, _ = db.Exec(`ALTER TABLE hosts ADD COLUMN auth_type TEXT DEFAULT ''`)
+		_, _ = db.Exec(`ALTER TABLE hosts ADD COLUMN auth_url TEXT DEFAULT ''`)
+
 		// Pre-compile hot-path statements to avoid SQL re-parsing on every host/probe callback.
 		st.upsertSt, err = db.Prepare(`
 INSERT INTO hosts(host, root, depth, sources, first_seen, last_seen, first_scan, last_scan)
@@ -70,7 +74,7 @@ ON CONFLICT(host) DO UPDATE SET
 			return nil, fmt.Errorf("prepare upsert: %w", err)
 		}
 		st.probeSt, err = db.Prepare(`
-UPDATE hosts SET alive=1, url=?, status=?, title=?, server=?, tech=?, ips=?, cdn=?, waf=?, length=?
+UPDATE hosts SET alive=1, url=?, status=?, title=?, server=?, tech=?, ips=?, cdn=?, waf=?, length=?, auth_type=?, auth_url=?
 WHERE host=?`)
 		if err != nil {
 			st.Close()
@@ -125,13 +129,19 @@ func (s *Store) UpsertHost(scan int64, root, host string, depth int, sources []s
 
 // SaveProbe updates probe results for a host.
 func (s *Store) SaveProbe(host string, p types.Probe) error {
-	_, err := s.probeSt.Exec(p.URL, p.Status, p.Title, p.Server, packTech(p.Tech), p.IPs, p.CDN, p.WAF, p.Length, host)
+	_, err := s.probeSt.Exec(p.URL, p.Status, p.Title, p.Server, packTech(p.Tech), p.IPs, p.CDN, p.WAF, p.Length, p.AuthType, p.AuthURL, host)
+	return err
+}
+
+// UpdateAuth updates the asset role classification and auth URL for a host.
+func (s *Store) UpdateAuth(host, authType, authURL string) error {
+	_, err := s.db.Exec(`UPDATE hosts SET auth_type=?, auth_url=? WHERE host=?`, authType, authURL, host)
 	return err
 }
 
 // ResetProbe clears last scan's probe data so hosts that went down show as dead.
 func (s *Store) ResetProbe(root string) error {
-	_, err := s.db.Exec(`UPDATE hosts SET alive=0, url='', status=0, title='', server='', tech='', ips='', cdn='', waf='', length=0 WHERE root=?`, root)
+	_, err := s.db.Exec(`UPDATE hosts SET alive=0, url='', status=0, title='', server='', tech='', ips='', cdn='', waf='', length=0, auth_type='', auth_url='' WHERE root=?`, root)
 	return err
 }
 
@@ -148,7 +158,8 @@ func (s *Store) QueryHosts(f types.Filter) ([]types.Host, error) {
 		var h types.Host
 		var tech string
 		if err := rows.Scan(&h.Host, &h.Root, &h.Depth, &h.Sources, &h.FirstSeen, &h.LastSeen, &h.New,
-			&h.Alive, &h.URL, &h.Status, &h.Title, &h.Server, &tech, &h.IPs, &h.CDN, &h.WAF, &h.Length); err != nil {
+			&h.Alive, &h.URL, &h.Status, &h.Title, &h.Server, &tech, &h.IPs, &h.CDN, &h.WAF, &h.Length,
+			&h.AuthType, &h.AuthURL); err != nil {
 			return nil, err
 		}
 		h.Tech = unpackTech(tech)
@@ -280,6 +291,14 @@ func buildWhere(f types.Filter) (string, []any) {
 	if f.Root != "" {
 		conds = append(conds, "root = ?")
 		args = append(args, f.Root)
+	}
+	if f.Target != "" {
+		conds = append(conds, "root = ?")
+		args = append(args, f.Target)
+	}
+	if f.AuthType != "" {
+		conds = append(conds, "auth_type = ?")
+		args = append(args, f.AuthType)
 	}
 	if len(conds) == 0 {
 		return "", nil

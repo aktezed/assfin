@@ -102,15 +102,19 @@ SUBFINDER:
    -sf-concurrency int           subdomains enumerated in parallel (default 5)
    -pc, -provider-config string  subfinder provider-config.yaml
 
-PROBING:
-   -rate int     httpx max requests per second (default 30)
-   -threads int  httpx threads (default 25)
-   -timeout int  httpx request timeout in seconds (default 7)
-   -follow       follow redirects when probing
-   -no-probe     enumerate only, skip httpx
+PROBING & CLASSIFICATION:
+   -rate int          httpx max requests per second (default 30)
+   -threads int       httpx threads (default 25)
+   -timeout int       httpx request timeout in seconds (default 7)
+   -follow            follow redirects when probing
+   -no-probe          enumerate only, skip httpx
+   -no-auth           skip asset role (register/login/landing) classification
+   -auth-threads int  asset classification concurrency threads (default 10)
 
 QUERY / FILTER:
    -q, -query                 run in query mode against existing database
+   -t, -target string         target root domain for scoped query and summary
+   -auth-type string          filter by asset role: register, login_only, landing
    -name string[]             host contains (comma-separated for OR)
    -tech string[]             technology, e.g. -tech nginx,php
    -waf                       only hosts behind a WAF
@@ -125,9 +129,11 @@ QUERY / FILTER:
    -sql string                raw read-only SQL, e.g. "SELECT host, tech FROM hosts WHERE status=401"
    -o, -output-format string  output: table, list, json (default "table")
 
-REPORT:
-   -report      generate HTML report from database (or after scan)
-   -out string  HTML report output path (default report.html)
+REPORT & SERVER:
+   -report        generate HTML report from database (or after scan)
+   -out string    HTML report output path (default <target>-report.html)
+   -serve string  start headless dashboard web server on address/port (e.g. :8080 or 8080)
+   -p, -port int  port for dashboard web server (default 8080)
 
 GENERAL:
    -s, -silent  silent mode: output only results
@@ -210,6 +216,12 @@ assfin query -db example.com.db -name api,admin,staging
 # Filter by specific WAF vendor
 assfin query -db example.com.db -waf-name cloudflare
 
+# Filter by asset role: registerable, login_only, or landing
+assfin query -db example.com.db -auth-type register
+
+# View formatted terminal dossier for a target (ideal on headless VPS)
+assfin query -db example.com.db -target example.com
+
 # Filter newly discovered hosts from the latest scan and pipe to nuclei
 assfin query -db example.com.db -new -o list | nuclei -t cves/
 
@@ -217,7 +229,7 @@ assfin query -db example.com.db -new -o list | nuclei -t cves/
 assfin query -db example.com.db -filter-depth 2 -o json
 
 # Run raw read-only SQL queries
-assfin query -db example.com.db -sql "SELECT host, title, status FROM hosts WHERE status = 403"
+assfin query -db example.com.db -sql "SELECT host, title, status, auth_type FROM hosts WHERE status = 200"
 ```
 
 ### Database Schema
@@ -225,18 +237,39 @@ assfin query -db example.com.db -sql "SELECT host, title, status FROM hosts WHER
 The `hosts` table contains the following fields:
 
 ```text
-host, root, depth, sources, first_seen, last_seen, first_scan, last_scan, alive, url, status, title, server, tech, ips, cdn, waf, length
+host, root, depth, sources, first_seen, last_seen, first_scan, last_scan, alive, url, status, title, server, tech, ips, cdn, waf, length, auth_type, auth_url
 ```
 
 ---
 
-## HTML Reports
+## Reports & Headless VPS Dashboard
 
-Generate a self-contained, offline-compatible HTML dashboard from an existing database:
+### Target-Specific Reports
+Generate a self-contained, offline-compatible HTML dashboard from an existing database. Scans automatically name the report after the target (e.g. `example.com-report.html`):
 
 ```bash
-assfin report -db example.com.db
+# Output defaults to example.com-report.html
+assfin report -db example.com.db -target example.com
+
+# Custom report output path
 assfin report -db example.com.db -out audit.html
+```
+
+### Headless VPS Dashboard Server
+When running on a headless VPS without a desktop browser, start the built-in lightweight web server:
+
+```bash
+# Start server on default port 8080
+assfin serve -db example.com.db -port 8080
+
+# Or start server right after scanning
+assfin scan -d example.com -serve 8080
+```
+
+Access from your local machine using an SSH tunnel:
+```bash
+ssh -NL 8080:localhost:8080 user@<vps-ip>
+# Then open http://localhost:8080 in your laptop browser!
 ```
 
 The generated report features:

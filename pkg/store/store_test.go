@@ -28,8 +28,8 @@ func seedDB(t *testing.T) (string, func(types.Filter) []string) {
 	must(s.UpsertHost(s1, "a.com", "a.com", 0, nil))
 	must(s.UpsertHost(s1, "a.com", "api.a.com", 1, []string{"crtsh"}))
 	must(s.UpsertHost(s1, "a.com", "dev.a.com", 1, nil))
-	must(s.SaveProbe("api.a.com", types.Probe{Status: 200, Tech: []string{"Nginx:1.21", "PHP"}, WAF: "Cloudflare"}))
-	must(s.SaveProbe("dev.a.com", types.Probe{Status: 403, Tech: []string{"Apache"}}))
+	must(s.SaveProbe("api.a.com", types.Probe{Status: 200, Tech: []string{"Nginx:1.21", "PHP"}, WAF: "Cloudflare", AuthType: "register", AuthURL: "https://api.a.com/signup"}))
+	must(s.SaveProbe("dev.a.com", types.Probe{Status: 403, Tech: []string{"Apache"}, AuthType: "login_only", AuthURL: "https://dev.a.com/login"}))
 
 	s2, err := s.StartScan("a.com", "{}")
 	must(err)
@@ -67,6 +67,8 @@ func TestQueryFilters(t *testing.T) {
 		{"no waf + alive", types.Filter{Depth: -1, WAF: "no", Alive: "yes"}, []string{"dev.a.com"}},
 		{"waf name", types.Filter{Depth: -1, WAFName: "cloud"}, []string{"api.a.com"}},
 		{"status", types.Filter{Depth: -1, Status: []int{403, 500}}, []string{"dev.a.com"}},
+		{"auth_type register", types.Filter{Depth: -1, AuthType: "register"}, []string{"api.a.com"}},
+		{"auth_type login_only", types.Filter{Depth: -1, AuthType: "login_only"}, []string{"dev.a.com"}},
 		{"dead", types.Filter{Depth: -1, Alive: "no"}, []string{"100%_x.a.com", "a.com", "v1.api.a.com"}},
 		{"new", types.Filter{Depth: -1, New: true}, []string{"100%_x.a.com", "v1.api.a.com"}},
 		{"depth", types.Filter{Depth: 2}, []string{"v1.api.a.com"}},

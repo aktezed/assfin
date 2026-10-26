@@ -4,6 +4,7 @@ import (
 	_ "embed"
 	"encoding/json"
 	"html/template"
+	"io"
 	"os"
 	"time"
 
@@ -20,8 +21,8 @@ type templatePayload struct {
 	DataJSON template.JS
 }
 
-// WriteReport queries data from store and writes the HTML report to out.
-func WriteReport(s *store.Store, out string) error {
+// RenderReport queries data from store and renders the HTML report to w.
+func RenderReport(s *store.Store, w io.Writer) error {
 	hosts, err := s.QueryHosts(types.Filter{Depth: -1})
 	if err != nil {
 		return err
@@ -45,15 +46,20 @@ func WriteReport(s *store.Store, out string) error {
 		return err
 	}
 
+	payload := templatePayload{
+		DataJSON: template.JS(rawJSON),
+	}
+
+	return reportTmpl.Execute(w, payload)
+}
+
+// WriteReport queries data from store and writes the HTML report to out.
+func WriteReport(s *store.Store, out string) error {
 	f, err := os.Create(out)
 	if err != nil {
 		return err
 	}
 	defer f.Close()
 
-	payload := templatePayload{
-		DataJSON: template.JS(rawJSON),
-	}
-
-	return reportTmpl.Execute(f, payload)
+	return RenderReport(s, f)
 }

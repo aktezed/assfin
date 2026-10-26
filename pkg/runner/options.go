@@ -23,7 +23,11 @@ func ParseOptions() *types.Options {
 	if err == nil {
 		appDir := filepath.Join(configDir, "assfin")
 		if err := os.MkdirAll(appDir, 0o755); err == nil {
-			configPath = filepath.Join(appDir, "config.yaml")
+			targetConfig := filepath.Join(appDir, "config.yaml")
+			if f, err := os.OpenFile(targetConfig, os.O_RDWR|os.O_CREATE, 0o644); err == nil {
+				_ = f.Close()
+				configPath = targetConfig
+			}
 		}
 	}
 	flagSet.SetConfigFilePath(configPath)
@@ -39,6 +43,9 @@ func ParseOptions() *types.Options {
 			args = args[1:]
 		case "report":
 			opts.Command = "report"
+			args = args[1:]
+		case "serve":
+			opts.Command = "serve"
 			args = args[1:]
 		}
 	}
@@ -70,17 +77,21 @@ func ParseOptions() *types.Options {
 	)
 
 	// HTTPX Probing
-	flagSet.CreateGroup("httpx", "PROBING",
+	flagSet.CreateGroup("httpx", "PROBING & CLASSIFICATION",
 		flagSet.IntVar(&opts.RateLimit, "rate", 30, "httpx max requests per second"),
 		flagSet.IntVar(&opts.Threads, "threads", 25, "httpx threads"),
 		flagSet.IntVar(&opts.Timeout, "timeout", 7, "httpx request timeout in seconds"),
 		flagSet.BoolVar(&opts.FollowRedirects, "follow", false, "follow redirects when probing"),
 		flagSet.BoolVar(&opts.NoProbe, "no-probe", false, "enumerate only, skip httpx"),
+		flagSet.BoolVar(&opts.NoAuth, "no-auth", false, "skip asset role (register/login/landing) classification"),
+		flagSet.IntVar(&opts.AuthThreads, "auth-threads", 10, "asset classification concurrency threads"),
 	)
 
 	// Query / Filtering
 	flagSet.CreateGroup("query", "QUERY / FILTER",
 		flagSet.BoolVarP(&opts.Query, "query", "q", false, "run in query mode against existing database"),
+		flagSet.StringVarP(&opts.Target, "target", "t", "", "target root domain for scoped query and summary"),
+		flagSet.StringVar(&opts.AuthType, "auth-type", "", "filter by asset role: register, login_only, landing"),
 		flagSet.StringSliceVar(&opts.Names, "name", nil, "host contains (comma-separated for OR)", goflags.CommaSeparatedStringSliceOptions),
 		flagSet.StringSliceVar(&opts.Tech, "tech", nil, "technology, e.g. -tech nginx,php", goflags.CommaSeparatedStringSliceOptions),
 		flagSet.BoolVar(&opts.HasWAF, "waf", false, "only hosts behind a WAF"),
@@ -96,10 +107,12 @@ func ParseOptions() *types.Options {
 		flagSet.StringVarP(&opts.OutputFormat, "output-format", "o", "table", "output: table, list, json"),
 	)
 
-	// Report
-	flagSet.CreateGroup("report", "REPORT",
+	// Report & Web Dashboard Server
+	flagSet.CreateGroup("report", "REPORT & SERVER",
 		flagSet.BoolVar(&opts.Report, "report", false, "generate HTML report from database (or after scan)"),
-		flagSet.StringVar(&opts.ReportOutput, "out", "", "HTML report output path (default report.html)"),
+		flagSet.StringVar(&opts.ReportOutput, "out", "", "HTML report output path (default <target>-report.html)"),
+		flagSet.StringVar(&opts.Serve, "serve", "", "start headless dashboard web server on address/port (e.g. :8080 or 8080)"),
+		flagSet.IntVarP(&opts.Port, "port", "p", 8080, "port for dashboard web server"),
 	)
 
 	// General
@@ -136,20 +149,30 @@ func validateOptions(opts *types.Options) error {
 	// Determine effective command if not set explicitly
 	if opts.Command == "" {
 		switch {
+		case opts.Serve != "":
+			opts.Command = "serve"
 		case opts.Domain != "" || opts.DomainList != "":
 			opts.Command = "scan"
 		case opts.Report || opts.ReportOutput != "":
 			opts.Command = "report"
-		case opts.Query || opts.RawSQL != "" || opts.HasWAF || opts.NoWAF || opts.Alive || opts.Dead || len(opts.Names) > 0 || len(opts.Tech) > 0 || opts.Status != "":
+		case opts.Query || opts.Target != "" || opts.AuthType != "" || opts.RawSQL != "" || opts.HasWAF || opts.NoWAF || opts.Alive || opts.Dead || len(opts.Names) > 0 || len(opts.Tech) > 0 || opts.Status != "":
 			opts.Command = "query"
 		default:
-			return errors.New("no command or targets specified (use -d, -dL, -q, or -report)")
+			return errors.New("no command or targets specified (use -d, -dL, -q, -report, or serve)")
 		}
 	}
 
-	if opts.Command == "query" || opts.Command == "report" {
+	if opts.Command == "query" || opts.Command == "report" || opts.Command == "serve" {
 		if opts.DBPath == "" {
-			return errors.New("need -db for query or report")
+			if opts.Domain != "" {
+				opts.DBPath = opts.Domain + ".db"
+			} else if opts.Target != "" {
+				opts.DBPath = opts.Target + ".db"
+			} else if opts.FilterRoot != "" {
+				opts.DBPath = opts.FilterRoot + ".db"
+			} else {
+				opts.DBPath = "assfin.db"
+			}
 		}
 	}
 

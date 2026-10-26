@@ -1,8 +1,10 @@
 package runner
 
 import (
+	"bytes"
 	"context"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -86,5 +88,53 @@ func TestFormatDuration(t *testing.T) {
 		if got != tt.want {
 			t.Errorf("formatDuration(%v) = %q, want %q", tt.d, got, tt.want)
 		}
+	}
+}
+
+func TestNormalizeListenAddr(t *testing.T) {
+	tests := []struct {
+		input string
+		want  string
+	}{
+		{"", ":8080"},
+		{"8080", ":8080"},
+		{":9000", ":9000"},
+		{"127.0.0.1:3000", "127.0.0.1:3000"},
+	}
+
+	for _, tt := range tests {
+		got := normalizeListenAddr(tt.input)
+		if got != tt.want {
+			t.Errorf("normalizeListenAddr(%q) = %q, want %q", tt.input, got, tt.want)
+		}
+	}
+}
+
+func TestPrintTargetSummary(t *testing.T) {
+	hosts := []types.Host{
+		{Host: "app.example.com", Alive: true, AuthType: "register", AuthURL: "https://app.example.com/signup"},
+		{Host: "admin.example.com", Alive: true, AuthType: "login_only", AuthURL: "https://admin.example.com/login", WAF: "Cloudflare"},
+		{Host: "blog.example.com", Alive: true, AuthType: "landing", URL: "https://blog.example.com"},
+		{Host: "dead.example.com", Alive: false},
+	}
+
+	var buf bytes.Buffer
+	PrintTargetSummary(&buf, "example.com", hosts)
+	out := buf.String()
+
+	if !strings.Contains(out, "TARGET DOSSIER : EXAMPLE.COM") {
+		t.Errorf("missing target header: %s", out)
+	}
+	if !strings.Contains(out, "[REGISTERABLE] : 1") {
+		t.Errorf("missing registerable count: %s", out)
+	}
+	if !strings.Contains(out, "https://app.example.com/signup") {
+		t.Errorf("missing register auth url: %s", out)
+	}
+	if !strings.Contains(out, "[LOGIN-ONLY]   : 1") {
+		t.Errorf("missing login-only count: %s", out)
+	}
+	if !strings.Contains(out, "[Cloudflare]") {
+		t.Errorf("missing WAF label: %s", out)
 	}
 }

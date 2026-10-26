@@ -564,6 +564,22 @@
     white-space: nowrap;
   }
 
+  .auth-badge {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    padding: 1.5px 7px;
+    border-radius: 999px;
+    font-size: 11px;
+    font-weight: 600;
+    line-height: 1.3;
+    white-space: nowrap;
+    border: 1px solid var(--line);
+  }
+  .auth-badge.register { background: var(--ink); color: #ffffff; border-color: var(--ink); }
+  .auth-badge.login_only { background: var(--well-alt); color: var(--ink); border-color: var(--line-strong); }
+  .auth-badge.landing { background: var(--well); color: var(--faint); border-color: var(--line); }
+
   .ip-stack {
     display: flex;
     flex-direction: column;
@@ -868,6 +884,27 @@
       </section>
 
       <section class="facet-card">
+        <div class="facet-head"><span>Asset Role</span><span class="faint num">auth</span></div>
+        <div class="facet-list" id="facet-auth">
+          <button class="facet-btn" type="button" data-auth="register" aria-pressed="false">
+            <span class="facet-bar" id="fbar-auth-register"></span>
+            <span class="facet-name">Registerable</span>
+            <span class="facet-count num" id="fcnt-auth-register">0</span>
+          </button>
+          <button class="facet-btn" type="button" data-auth="login_only" aria-pressed="false">
+            <span class="facet-bar" id="fbar-auth-login"></span>
+            <span class="facet-name">Login Only</span>
+            <span class="facet-count num" id="fcnt-auth-login">0</span>
+          </button>
+          <button class="facet-btn" type="button" data-auth="landing" aria-pressed="false">
+            <span class="facet-bar" id="fbar-auth-landing"></span>
+            <span class="facet-name">Landing Page</span>
+            <span class="facet-count num" id="fcnt-auth-landing">0</span>
+          </button>
+        </div>
+      </section>
+
+      <section class="facet-card">
         <div class="facet-head"><span>WAF Vendors</span><span class="faint num">edge</span></div>
         <div class="facet-list" id="facet-waf"></div>
       </section>
@@ -969,6 +1006,7 @@ const DATA = {{ .DataJSON }};
     q: "",
     key: "",
     status: new Set(),
+    auth: "",
     tech: "",
     wafVendor: "",
     depthFilter: null,
@@ -1078,6 +1116,7 @@ const DATA = {{ .DataJSON }};
     const techCount = {};
     const wafCount = {};
     const depthCount = {};
+    const authCount = { register: 0, login_only: 0, landing: 0 };
 
     scoped.forEach(h => {
       counts[kind(h)]++;
@@ -1089,6 +1128,9 @@ const DATA = {{ .DataJSON }};
       if (h.alive) {
         const wKey = h.waf ? h.waf : "No WAF (Exposed)";
         wafCount[wKey] = (wafCount[wKey] || 0) + 1;
+        const role = h.auth_type || "landing";
+        if (authCount[role] != null) authCount[role]++;
+        else authCount.landing++;
       }
       h.tech.forEach(t => { techCount[t] = (techCount[t] || 0) + 1; });
       const dKey = h.depth || 0;
@@ -1105,6 +1147,16 @@ const DATA = {{ .DataJSON }};
     ["2", "3", "4", "5"].forEach(s => {
       $("fcnt-s" + s).textContent = fmt.format(statusCounts[s]);
       $("fbar-s" + s).style.width = (statusCounts[s] / total * 100) + "%";
+    });
+
+    // Asset Role / Auth Facet
+    ["register", "login_only", "landing"].forEach(a => {
+      const idKey = a === "login_only" ? "login" : a;
+      const count = authCount[a] || 0;
+      const elemCnt = $("fcnt-auth-" + idKey);
+      const elemBar = $("fbar-auth-" + idKey);
+      if (elemCnt) elemCnt.textContent = fmt.format(count);
+      if (elemBar) elemBar.style.width = (count / total * 100) + "%";
     });
 
     // WAF Facet list
@@ -1177,6 +1229,7 @@ const DATA = {{ .DataJSON }};
       state.q ||
       state.key ||
       state.status.size ||
+      state.auth ||
       state.tech ||
       state.wafVendor ||
       state.depthFilter !== null ||
@@ -1197,6 +1250,10 @@ const DATA = {{ .DataJSON }};
     if (state.root) addChip("Root: " + state.root, () => { state.root = ""; updateSubtitle(); render(); });
     if (state.key) addChip("Posture: " + state.key, () => { state.key = ""; render(); });
     state.status.forEach(s => addChip(s + "xx", () => { state.status.delete(s); render(); }));
+    if (state.auth) {
+      const authLabel = state.auth === "register" ? "Role: Registerable" : state.auth === "login_only" ? "Role: Login Only" : "Role: Landing Page";
+      addChip(authLabel, () => { state.auth = ""; render(); });
+    }
     if (state.wafVendor) addChip("WAF: " + state.wafVendor, () => { state.wafVendor = ""; render(); });
     if (state.tech) addChip("Tech: " + state.tech, () => { state.tech = ""; render(); });
     if (state.depthFilter !== null) addChip("Depth " + state.depthFilter, () => { state.depthFilter = null; render(); });
@@ -1213,6 +1270,9 @@ const DATA = {{ .DataJSON }};
     document.querySelectorAll("[data-status]").forEach(b => {
       b.setAttribute("aria-pressed", String(state.status.has(b.dataset.status)));
     });
+    document.querySelectorAll("[data-auth]").forEach(b => {
+      b.setAttribute("aria-pressed", String(state.auth === b.dataset.auth));
+    });
     $("tech").value = state.tech;
     $("tech").dataset.active = String(Boolean(state.tech));
     $("root").value = state.root;
@@ -1228,6 +1288,11 @@ const DATA = {{ .DataJSON }};
     if (state.root && h.root !== state.root) return false;
     if (state.key === "new" ? !h.new : state.key && kind(h) !== state.key) return false;
     if (state.status.size && !(h.alive && state.status.has(String(h.status)[0]))) return false;
+    if (state.auth) {
+      if (!h.alive) return false;
+      const r = h.auth_type || "landing";
+      if (r !== state.auth) return false;
+    }
     if (state.wafVendor) {
       if (!h.alive) return false;
       const wKey = h.waf ? h.waf : "No WAF (Exposed)";
@@ -1286,6 +1351,11 @@ const DATA = {{ .DataJSON }};
     const pLabel = k === "exposed" ? "Reachable · No WAF" : k === "waf" ? "Behind WAF (" + h.waf + ")" : "No HTTP Response";
     const pPill = el("span", "posture-pill " + k, pLabel);
     badges.append(pPill);
+    if (h.alive) {
+      const role = h.auth_type || "landing";
+      const roleLabel = role === "register" ? "Registerable Asset" : role === "login_only" ? "Login Only" : "Landing Page";
+      badges.append(el("span", "auth-badge " + role, roleLabel));
+    }
     if (h.new) badges.append(el("span", "badge-new", "new this scan"));
 
     // Actions
@@ -1303,12 +1373,28 @@ const DATA = {{ .DataJSON }};
     actions.append(copyBtn);
 
     if (h.alive && /^https?:\/\//i.test(h.url)) {
-      const openA = el("a", "btn primary", "Open target");
+      const openA = el("a", "btn", "Open target");
       openA.href = h.url;
       openA.target = "_blank";
       openA.rel = "noopener noreferrer";
       openA.append(makeExtIcon());
       actions.append(openA);
+    }
+
+    if (h.alive && h.auth_type === "register" && h.auth_url && /^https?:\/\//i.test(h.auth_url)) {
+      const regA = el("a", "btn primary", "Open Register");
+      regA.href = h.auth_url;
+      regA.target = "_blank";
+      regA.rel = "noopener noreferrer";
+      regA.append(makeExtIcon());
+      actions.append(regA);
+    } else if (h.alive && h.auth_type === "login_only" && h.auth_url && /^https?:\/\//i.test(h.auth_url)) {
+      const logA = el("a", "btn primary", "Open Login");
+      logA.href = h.auth_url;
+      logA.target = "_blank";
+      logA.rel = "noopener noreferrer";
+      logA.append(makeExtIcon());
+      actions.append(logA);
     }
 
     // 4 Assay Tiles
@@ -1337,6 +1423,17 @@ const DATA = {{ .DataJSON }};
       target.append(row);
     };
     if (h.title) addKV(net, "Page Title", h.title, false);
+    if (h.alive && h.auth_type) {
+      const roleLabel = h.auth_type === "register" ? "Registerable (Open Signup)" : h.auth_type === "login_only" ? "Login-Only Portal" : "Landing Page";
+      addKV(net, "Asset Role", roleLabel, false);
+    }
+    if (h.alive && h.auth_url && /^https?:\/\//i.test(h.auth_url)) {
+      const aAuth = el("a", "num", h.auth_url);
+      aAuth.href = h.auth_url;
+      aAuth.target = "_blank";
+      aAuth.rel = "noopener noreferrer";
+      addKV(net, "Auth Endpoint", aAuth, true);
+    }
     if (h.alive && /^https?:\/\//i.test(h.url)) {
       const a = el("a", "num", h.url);
       a.href = h.url;
@@ -1422,6 +1519,11 @@ const DATA = {{ .DataJSON }};
       if (h.host !== h.root) nameSpan.append(el("span", "host-rest", "." + h.root));
       wrap.append(dot, nameSpan);
       if (h.new) wrap.append(el("span", "badge-new", "new"));
+      if (h.alive) {
+        const role = h.auth_type || "landing";
+        const roleText = role === "register" ? "Register" : role === "login_only" ? "Login" : "Landing";
+        wrap.append(el("span", "auth-badge " + role, roleText));
+      }
 
       if (h.alive && /^https?:\/\//i.test(h.url)) {
         const ext = el("a", "ext-link");
@@ -1532,6 +1634,7 @@ const DATA = {{ .DataJSON }};
     state.q = "";
     state.key = "";
     state.status.clear();
+    state.auth = "";
     state.tech = "";
     state.wafVendor = "";
     state.depthFilter = null;
@@ -1597,6 +1700,13 @@ const DATA = {{ .DataJSON }};
     const s = b.dataset.status;
     state.status.has(s) ? state.status.delete(s) : state.status.add(s);
     if (state.status.size > 0 && state.key === "dead") state.key = "";
+    render();
+  }));
+
+  document.querySelectorAll("[data-auth]").forEach(b => b.addEventListener("click", () => {
+    const a = b.dataset.auth;
+    state.auth = state.auth === a ? "" : a;
+    if (state.auth && state.key === "dead") state.key = "";
     render();
   }));
 

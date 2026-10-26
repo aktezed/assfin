@@ -24,32 +24,38 @@ type Host struct {
 	CDN       string   `json:"cdn"`
 	WAF       string   `json:"waf"`
 	Length    int      `json:"length"`
+	AuthType  string   `json:"auth_type"`
+	AuthURL   string   `json:"auth_url"`
 }
 
 // Probe is the subset of an httpx result stored per host.
 type Probe struct {
-	URL    string
-	Title  string
-	Server string
-	IPs    string
-	CDN    string
-	WAF    string
-	Status int
-	Length int
-	Tech   []string
+	URL      string
+	Title    string
+	Server   string
+	IPs      string
+	CDN      string
+	WAF      string
+	Status   int
+	Length   int
+	Tech     []string
+	AuthType string
+	AuthURL  string
 }
 
 // Filter maps query flags to SQL conditions.
 type Filter struct {
-	Names   []string // substring match, OR'ed
-	Tech    []string // per-item match, OR'ed
-	WAF     string   // "", "yes", "no"
-	WAFName string
-	Alive   string // "", "yes", "no"
-	Status  []int
-	New     bool
-	Depth   int // -1 = any
-	Root    string
+	Names    []string // substring match, OR'ed
+	Tech     []string // per-item match, OR'ed
+	WAF      string   // "", "yes", "no"
+	WAFName  string
+	Alive    string // "", "yes", "no"
+	Status   []int
+	New      bool
+	Depth    int // -1 = any
+	Root     string
+	AuthType string // "", "register", "login_only", "landing"
+	Target   string // target domain
 }
 
 // RootInfo represents summary information of a scanned root domain.

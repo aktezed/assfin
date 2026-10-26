@@ -52,6 +52,8 @@ func (r *Runner) Run(ctx context.Context) error {
 		return r.ExecuteQuery(ctx)
 	case "report":
 		return r.ExecuteReport(ctx)
+	case "serve":
+		return r.ExecuteServe(ctx)
 	default:
 		return fmt.Errorf("unknown command %q", r.options.Command)
 	}
@@ -166,6 +168,21 @@ func (r *Runner) ExecuteScan(ctx context.Context) error {
 			if err != nil {
 				return fmt.Errorf("probing stopped: %w (partial results saved to %s)", err, dbPath)
 			}
+
+			// Classify asset roles across alive endpoints (registerable, login-only, landing)
+			if !r.options.NoAuth {
+				aliveHosts, qErr := dbStore.QueryHosts(types.Filter{Root: root, Alive: "yes", Depth: -1})
+				if qErr == nil && len(aliveHosts) > 0 {
+					gologger.Info().Msgf("[%s] classifying asset roles (registerable, login-only, landing) across %d alive hosts", root, len(aliveHosts))
+					threads := r.options.AuthThreads
+					if threads <= 0 {
+						threads = 10
+					}
+					scan.ClassifyAliveHosts(ctx, aliveHosts, threads, r.options.Timeout, func(h string, authType, authURL string) {
+						_ = dbStore.UpdateAuth(h, authType, authURL)
+					})
+				}
+			}
 		}
 
 		if err := dbStore.FinishScan(scanID); err != nil {
@@ -193,6 +210,10 @@ func (r *Runner) ExecuteScan(ctx context.Context) error {
 				root, len(all), alive, wafCount, fresh, formatDuration(scanDuration),
 				formatDuration(enumDuration), formatDuration(probeDuration), dbPath)
 		}
+
+		if !r.options.Silent {
+			PrintTargetSummary(os.Stdout, root, all)
+		}
 	}
 
 	if len(roots) > 1 {
@@ -202,12 +223,24 @@ func (r *Runner) ExecuteScan(ctx context.Context) error {
 	if r.options.Report || r.options.ReportOutput != "" {
 		out := r.options.ReportOutput
 		if out == "" {
-			out = "report.html"
+			if len(roots) == 1 {
+				out = roots[0] + "-report.html"
+			} else {
+				out = "assfin-report.html"
+			}
 		}
 		if err := report.WriteReport(dbStore, out); err != nil {
 			return fmt.Errorf("write report: %w", err)
 		}
 		gologger.Info().Msgf("report written to %s", out)
+	}
+
+	if r.options.Serve != "" {
+		listenAddr := r.options.Serve
+		if listenAddr == "true" {
+			listenAddr = fmt.Sprintf(":%d", r.options.Port)
+		}
+		return RunServer(ctx, dbStore, listenAddr)
 	}
 
 	return nil
@@ -322,15 +355,21 @@ func (r *Runner) ExecuteQuery(ctx context.Context) error {
 		return w.Flush()
 	}
 
+	target := r.options.Target
+	if target == "" {
+		target = r.options.FilterRoot
+	}
+
 	f := types.Filter{
-		Names:   r.options.Names,
-		Tech:    r.options.Tech,
-		WAF:     pick(r.options.HasWAF, r.options.NoWAF),
-		WAFName: r.options.WAFName,
-		Alive:   pick(r.options.Alive, r.options.Dead),
-		New:     r.options.NewOnly,
-		Depth:   r.options.FilterDepth,
-		Root:    r.options.FilterRoot,
+		Names:    r.options.Names,
+		Tech:     r.options.Tech,
+		WAF:      pick(r.options.HasWAF, r.options.NoWAF),
+		WAFName:  r.options.WAFName,
+		Alive:    pick(r.options.Alive, r.options.Dead),
+		New:      r.options.NewOnly,
+		Depth:    r.options.FilterDepth,
+		Root:     target,
+		AuthType: r.options.AuthType,
 	}
 
 	for _, s := range strings.Split(r.options.Status, ",") {
@@ -349,6 +388,12 @@ func (r *Runner) ExecuteQuery(ctx context.Context) error {
 		return err
 	}
 
+	// If a specific target was requested and default table output is used without sub-filters, print the dossier
+	if r.options.Target != "" && r.options.OutputFormat == "table" && len(r.options.Names) == 0 && len(r.options.Tech) == 0 && r.options.AuthType == "" && r.options.Status == "" {
+		PrintTargetSummary(os.Stdout, r.options.Target, hosts)
+		return nil
+	}
+
 	switch r.options.OutputFormat {
 	case "list":
 		for _, h := range hosts {
@@ -363,13 +408,17 @@ func (r *Runner) ExecuteQuery(ctx context.Context) error {
 		return enc.Encode(hosts)
 	case "table":
 		w := tabwriter.NewWriter(os.Stdout, 0, 0, 2, ' ', 0)
-		fmt.Fprintln(w, "HOST\tSTATUS\tTITLE\tTECH\tWAF\tIPS")
+		fmt.Fprintln(w, "HOST\tSTATUS\tAUTH\tTITLE\tTECH\tWAF\tIPS")
 		for _, h := range hosts {
 			st := "-"
 			if h.Alive {
 				st = strconv.Itoa(h.Status)
 			}
-			fmt.Fprintf(w, "%s\t%s\t%s\t%s\t%s\t%s\n", h.Host, st, clip(h.Title, 40), clip(strings.Join(h.Tech, ","), 40), h.WAF, h.IPs)
+			auth := "-"
+			if h.AuthType != "" {
+				auth = h.AuthType
+			}
+			fmt.Fprintf(w, "%s\t%s\t%s\t%s\t%s\t%s\t%s\n", h.Host, st, auth, clip(h.Title, 35), clip(strings.Join(h.Tech, ","), 35), h.WAF, h.IPs)
 		}
 		if err := w.Flush(); err != nil {
 			return err
@@ -396,7 +445,15 @@ func (r *Runner) ExecuteReport(ctx context.Context) error {
 
 	out := r.options.ReportOutput
 	if out == "" {
-		out = "report.html"
+		if r.options.Domain != "" {
+			out = r.options.Domain + "-report.html"
+		} else if r.options.Target != "" {
+			out = r.options.Target + "-report.html"
+		} else if r.options.FilterRoot != "" {
+			out = r.options.FilterRoot + "-report.html"
+		} else {
+			out = "report.html"
+		}
 	}
 
 	if err := report.WriteReport(dbStore, out); err != nil {
@@ -404,7 +461,40 @@ func (r *Runner) ExecuteReport(ctx context.Context) error {
 	}
 
 	gologger.Info().Msgf("report written to %s", out)
+
+	if r.options.Serve != "" {
+		listenAddr := r.options.Serve
+		if listenAddr == "true" {
+			listenAddr = fmt.Sprintf(":%d", r.options.Port)
+		}
+		return RunServer(ctx, dbStore, listenAddr)
+	}
+
 	return nil
+}
+
+// ExecuteServe starts the dashboard web server on the specified port.
+func (r *Runner) ExecuteServe(ctx context.Context) error {
+	if _, err := os.Stat(r.options.DBPath); err != nil {
+		return fmt.Errorf("database not found: %w", err)
+	}
+
+	dbStore, err := store.New(r.options.DBPath, true)
+	if err != nil {
+		return fmt.Errorf("open store: %w", err)
+	}
+	r.store = dbStore
+
+	listenAddr := r.options.Serve
+	if listenAddr == "" || listenAddr == "true" {
+		port := r.options.Port
+		if port <= 0 {
+			port = 8080
+		}
+		listenAddr = fmt.Sprintf(":%d", port)
+	}
+
+	return RunServer(ctx, dbStore, listenAddr)
 }
 
 func readRoots(domain, list string) ([]string, error) {

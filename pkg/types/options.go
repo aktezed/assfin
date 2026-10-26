@@ -32,6 +32,10 @@ type Options struct {
 	FollowRedirects bool
 	NoProbe         bool
 
+	// Asset Role / Auth Classification
+	NoAuth      bool
+	AuthThreads int
+
 	// Query / Filtering
 	Query        bool
 	Names        goflags.StringSlice
@@ -47,10 +51,14 @@ type Options struct {
 	FilterRoot   string
 	RawSQL       string
 	OutputFormat string
+	AuthType     string
+	Target       string
 
-	// Reporting
+	// Reporting & Web Dashboard Server
 	Report       bool
 	ReportOutput string
+	Serve        string
+	Port         int
 
 	// General
 	Silent  bool

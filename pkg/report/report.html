@@ -3,71 +3,441 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>assfin report</title>
+<title>assfin — attack surface workbench</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
-<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500;600&family=IBM+Plex+Sans:wght@400;500;600;700&display=swap" rel="stylesheet">
 <style>
   :root {
-    --page: #f5f5f7; --card: #ffffff; --well: #fafafa; --ink: #09090b;
-    --muted: #52525b; --faint: #68686e; --line: rgba(0,0,0,.07); --line-strong: rgba(0,0,0,.15);
-    --waf: #71717a; --dead: #c7c7cc;
-    --sans: Inter, system-ui, -apple-system, "Segoe UI", sans-serif;
-    --mono: "JetBrains Mono", ui-monospace, "SF Mono", Menlo, monospace;
+    --page: #f5f5f7;
+    --card: #ffffff;
+    --well: #fafafa;
+    --well-alt: #f0f0f3;
+    --ink: #09090b;
+    --muted: #52525b;
+    --faint: #636369;
+    --line: rgba(0,0,0,.08);
+    --line-strong: rgba(0,0,0,.18);
+    --waf: #52525b;
+    --dead: #a1a1aa;
+    --sans: "IBM Plex Sans", system-ui, -apple-system, "Segoe UI", sans-serif;
+    --mono: "IBM Plex Mono", ui-monospace, "SF Mono", Menlo, monospace;
   }
   * { box-sizing: border-box; }
   ::selection { background: var(--ink); color: #ffffff; }
-  body { margin: 0; background: var(--page); color: var(--ink); font: 14px/1.5 var(--sans); -webkit-font-smoothing: antialiased; caret-color: var(--ink); }
+  body {
+    margin: 0;
+    background: var(--page);
+    color: var(--ink);
+    font: 13.5px/1.45 var(--sans);
+    -webkit-font-smoothing: antialiased;
+    caret-color: var(--ink);
+  }
   .num { font-family: var(--mono); font-variant-numeric: tabular-nums; }
   .faint { color: var(--faint); }
-  .wrap { max-width: 1280px; margin: 0 auto; padding: 24px 24px 64px; }
   button, input, select { font: inherit; color: inherit; }
   a { color: var(--ink); text-underline-offset: 3px; }
   :focus-visible { outline: 2px solid var(--ink); outline-offset: 2px; }
+  ::-webkit-scrollbar { width: 8px; height: 8px; }
+  ::-webkit-scrollbar-track { background: var(--page); }
+  ::-webkit-scrollbar-thumb { background: #c7c7cc; border-radius: 999px; }
+  ::-webkit-scrollbar-thumb:hover { background: var(--muted); }
 
-  header { display: flex; justify-content: space-between; align-items: baseline; gap: 16px; color: var(--muted); font-size: 13px; }
-  .brand { font-weight: 600; color: var(--ink); letter-spacing: -0.02em; }
-  h1 { font-size: clamp(28px, 4vw, 44px); line-height: 1.08; letter-spacing: -0.035em; font-weight: 700; margin: 16px 0 8px; overflow-wrap: anywhere; }
-  .sub { color: var(--muted); margin: 0 0 20px; display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
-  .dur-badge { display: inline-flex; align-items: center; gap: 5px; padding: 2px 10px; border-radius: 999px; background: var(--well); border: 1px solid var(--line); color: var(--ink); font-size: 12.5px; }
-  .dur-badge svg { opacity: .7; }
+  /* Sticky Top Command Bar */
+  .topbar {
+    position: sticky;
+    top: 0;
+    z-index: 20;
+    background: rgba(245, 245, 247, 0.9);
+    backdrop-filter: blur(12px);
+    -webkit-backdrop-filter: blur(12px);
+    border-bottom: 1px solid var(--line);
+  }
+  .topbar-inner {
+    max-width: 1600px;
+    margin: 0 auto;
+    padding: 12px 24px;
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    justify-content: space-between;
+    gap: 14px;
+  }
+  .brand-cluster {
+    display: flex;
+    align-items: center;
+    flex-wrap: wrap;
+    gap: 10px;
+  }
+  .brand-mark {
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
+    padding: 4px 12px 4px 6px;
+    border-radius: 999px;
+    background: var(--ink);
+    color: #ffffff;
+    font-family: var(--mono);
+    font-weight: 600;
+    font-size: 13px;
+    letter-spacing: -0.02em;
+  }
+  .brand-logo {
+    width: 26px;
+    height: 26px;
+    border-radius: 50%;
+    background: #ffffff;
+    color: var(--ink);
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    flex-shrink: 0;
+  }
+  .brand-logo svg {
+    width: 20px;
+    height: 20px;
+    display: block;
+    fill: currentColor;
+  }
+  h1 {
+    font-size: 24px;
+    line-height: 1.15;
+    letter-spacing: -0.03em;
+    font-weight: 700;
+    margin: 0;
+    overflow-wrap: anywhere;
+  }
+  .meta-pills {
+    display: flex;
+    align-items: center;
+    flex-wrap: wrap;
+    gap: 6px;
+  }
+  .meta-pill {
+    display: inline-flex;
+    align-items: center;
+    gap: 5px;
+    padding: 4px 10px;
+    border-radius: 999px;
+    background: var(--card);
+    border: 1px solid var(--line);
+    color: var(--muted);
+    font-size: 12px;
+  }
+  .meta-pill strong { color: var(--ink); font-weight: 600; }
 
-  .surface { background: var(--card); border: 1px solid var(--line); border-radius: 20px; padding: 20px 24px; box-shadow: 0 1px 2px rgba(0,0,0,.03), 0 8px 24px rgba(0,0,0,.03); }
-  .bar { display: flex; height: 12px; border-radius: 999px; overflow: hidden; background: var(--well); gap: 3px; }
-  .seg { width: 0; border-radius: 999px; transition: width .6s cubic-bezier(.22,1,.36,1); }
-  .seg.exposed { background: var(--ink); } .seg.waf { background: var(--waf); } .seg.dead { background: var(--dead); }
-  .legend { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 14px; }
-  .key { display: inline-flex; align-items: center; gap: 8px; padding: 7px 14px 7px 11px; border-radius: 999px; border: 1px solid var(--line); background: var(--well); cursor: pointer; transition: border-color .15s ease, background-color .15s ease, color .15s ease; }
-  .key:hover { border-color: var(--line-strong); }
-  .key[aria-pressed="true"] { background: var(--ink); color: #ffffff; border-color: var(--ink); }
-  .key[aria-pressed="true"] .dot.exposed { background: #ffffff; }
-  .key[aria-pressed="true"] .dot.waf { background: #a1a1aa; border-color: rgba(255,255,255,.4); }
-  .key[aria-pressed="true"] .dot.dead { background: #e4e4e7; border-color: rgba(255,255,255,.5); }
-  .dot { width: 9px; height: 9px; border-radius: 50%; flex-shrink: 0; }
-  .dot.exposed { background: var(--ink); }
-  .dot.waf { background: var(--waf); }
-  .dot.dead { background: var(--dead); border: 1px solid rgba(0,0,0,.18); }
-  .dot.new { background: transparent; border: 2px solid currentColor; width: 10px; height: 10px; }
-  .key .num { font-weight: 500; }
-  .key small { color: var(--muted); font-size: 13px; }
-  .key[aria-pressed="true"] small { color: #d4d4d8; }
-
-  .tools { position: sticky; top: 0; z-index: 2; display: flex; flex-wrap: wrap; align-items: center; gap: 8px; padding: 14px 0; margin-top: 16px; background: linear-gradient(var(--page) 82%, rgba(245,245,247,0)); }
-  .search { flex: 1 1 240px; height: 38px; padding: 0 16px; border-radius: 999px; border: 1px solid var(--line-strong); background: var(--card); }
+  .command-cluster {
+    display: flex;
+    align-items: center;
+    flex-wrap: wrap;
+    gap: 8px;
+    flex: 1 1 420px;
+    justify-content: flex-end;
+  }
+  .search-wrap {
+    position: relative;
+    flex: 1 1 240px;
+    max-width: 380px;
+  }
+  .search {
+    width: 100%;
+    height: 36px;
+    padding: 0 36px 0 14px;
+    border-radius: 999px;
+    border: 1px solid var(--line-strong);
+    background: var(--card);
+    font-size: 13px;
+  }
   .search::placeholder { color: var(--faint); }
-  .chip { height: 38px; padding: 0 14px; border-radius: 999px; border: 1px solid var(--line); background: var(--card); cursor: pointer; display: inline-flex; align-items: center; gap: 6px; white-space: nowrap; transition: border-color .15s ease, background-color .15s ease, color .15s ease; }
-  .chip:hover { border-color: var(--line-strong); }
-  .chip[aria-pressed="true"], select.chip[data-active="true"] { background: var(--ink); color: #ffffff; border-color: var(--ink); }
-  select.chip { padding-right: 12px; }
-  .chip.ghost { background: var(--well); color: var(--muted); }
-  .chip.ghost:hover { color: var(--ink); }
-  .tools-right { margin-left: auto; display: flex; align-items: center; gap: 8px; }
-  .count { color: var(--muted); font-size: 13px; white-space: nowrap; }
+  .kbd-hint {
+    position: absolute;
+    right: 10px;
+    top: 50%;
+    transform: translateY(-50%);
+    padding: 1px 6px;
+    border-radius: 5px;
+    background: var(--well-alt);
+    border: 1px solid var(--line);
+    color: var(--faint);
+    font-size: 11px;
+    pointer-events: none;
+  }
+  .btn {
+    height: 36px;
+    padding: 0 13px;
+    border-radius: 999px;
+    border: 1px solid var(--line);
+    background: var(--card);
+    color: var(--ink);
+    font-size: 12.5px;
+    font-weight: 500;
+    cursor: pointer;
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    white-space: nowrap;
+    transition: background-color .15s ease, border-color .15s ease, color .15s ease;
+  }
+  .btn:hover:not(:disabled) { border-color: var(--line-strong); background: var(--well); }
+  .btn:disabled { opacity: .45; cursor: not-allowed; }
+  .btn.primary { background: var(--ink); color: #ffffff; border-color: var(--ink); }
+  .btn.primary:hover:not(:disabled) { background: #27272a; }
+  .btn[data-active="true"] { background: var(--ink); color: #ffffff; border-color: var(--ink); }
+  select.btn { padding-right: 10px; }
 
-  .table-card { background: var(--card); border: 1px solid var(--line); border-radius: 20px; overflow: hidden; box-shadow: 0 1px 2px rgba(0,0,0,.02); }
+  /* Main Container */
+  .shell {
+    max-width: 1600px;
+    margin: 0 auto;
+    padding: 20px 24px 56px;
+  }
+
+  /* 4-Up KPI Assay Bento */
+  .kpi-grid {
+    display: grid;
+    grid-template-columns: repeat(4, minmax(0, 1fr));
+    gap: 12px;
+    margin-bottom: 16px;
+  }
+  .kpi-card {
+    text-align: left;
+    padding: 16px 18px;
+    border-radius: 16px;
+    border: 1px solid var(--line);
+    background: var(--card);
+    cursor: pointer;
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+    transition: border-color .15s ease, background-color .15s ease, color .15s ease;
+  }
+  .kpi-card:hover { border-color: var(--line-strong); }
+  .kpi-card[aria-pressed="true"] {
+    background: var(--ink);
+    color: #ffffff;
+    border-color: var(--ink);
+  }
+  .kpi-top {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 8px;
+  }
+  .kpi-title {
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
+    font-weight: 600;
+    font-size: 13px;
+  }
+  .kpi-dot {
+    width: 8px;
+    height: 8px;
+    border-radius: 50%;
+    flex-shrink: 0;
+  }
+  .kpi-dot.exposed { background: var(--ink); }
+  .kpi-dot.waf { background: var(--waf); }
+  .kpi-dot.dead { background: var(--dead); }
+  .kpi-dot.new { background: transparent; border: 2px solid currentColor; width: 9px; height: 9px; }
+  .kpi-card[aria-pressed="true"] .kpi-dot.exposed { background: #ffffff; }
+  .kpi-card[aria-pressed="true"] .kpi-dot.waf { background: #a1a1aa; }
+  .kpi-card[aria-pressed="true"] .kpi-dot.dead { background: #d4d4d8; }
+  .kpi-pct {
+    font-size: 12px;
+    color: var(--faint);
+    padding: 2px 8px;
+    border-radius: 999px;
+    background: var(--well);
+    border: 1px solid var(--line);
+  }
+  .kpi-card[aria-pressed="true"] .kpi-pct {
+    background: rgba(255,255,255,.12);
+    border-color: rgba(255,255,255,.2);
+    color: #e4e4e7;
+  }
+  .kpi-val {
+    font-size: clamp(24px, 2.6vw, 34px);
+    line-height: 1;
+    font-weight: 700;
+    letter-spacing: -0.03em;
+  }
+  .kpi-track {
+    height: 6px;
+    border-radius: 999px;
+    background: var(--well-alt);
+    overflow: hidden;
+  }
+  .kpi-card[aria-pressed="true"] .kpi-track { background: rgba(255,255,255,.18); }
+  .kpi-fill {
+    height: 100%;
+    width: 0;
+    border-radius: 999px;
+    background: var(--ink);
+    transition: width .5s cubic-bezier(.22,1,.36,1);
+  }
+  .kpi-fill.waf { background: var(--waf); }
+  .kpi-fill.dead { background: var(--dead); }
+  .kpi-card[aria-pressed="true"] .kpi-fill { background: #ffffff; }
+
+  /* 3-Pane Workbench */
+  .workbench {
+    display: grid;
+    grid-template-columns: 264px minmax(0, 1fr) 360px;
+    gap: 16px;
+    align-items: start;
+  }
+  .workbench.inspector-closed {
+    grid-template-columns: 264px minmax(0, 1fr);
+  }
+
+  /* Left Facet Rail */
+  .facet-rail {
+    position: sticky;
+    top: 72px;
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+    max-height: calc(100dvh - 92px);
+    overflow-y: auto;
+    padding-right: 2px;
+  }
+  .facet-card {
+    background: var(--card);
+    border: 1px solid var(--line);
+    border-radius: 16px;
+    padding: 14px;
+  }
+  .facet-head {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    margin: 0 0 10px;
+    font-size: 12.5px;
+    font-weight: 600;
+    color: var(--ink);
+  }
+  .facet-list {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+  }
+  .facet-btn {
+    position: relative;
+    width: 100%;
+    padding: 6px 10px;
+    border-radius: 8px;
+    border: 1px solid transparent;
+    background: var(--well);
+    cursor: pointer;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 8px;
+    font-size: 12.5px;
+    overflow: hidden;
+    text-align: left;
+  }
+  .facet-btn:hover { border-color: var(--line-strong); }
+  .facet-btn[aria-pressed="true"] {
+    background: var(--ink);
+    color: #ffffff;
+    border-color: var(--ink);
+  }
+  .facet-bar {
+    position: absolute;
+    left: 0;
+    top: 0;
+    bottom: 0;
+    background: rgba(0,0,0,.05);
+    pointer-events: none;
+    transition: width .35s cubic-bezier(.22,1,.36,1);
+  }
+  .facet-btn[aria-pressed="true"] .facet-bar { background: rgba(255,255,255,.14); }
+  .facet-name {
+    position: relative;
+    z-index: 1;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    font-weight: 500;
+  }
+  .facet-count {
+    position: relative;
+    z-index: 1;
+    font-size: 11.5px;
+    color: var(--faint);
+    flex-shrink: 0;
+  }
+  .facet-btn[aria-pressed="true"] .facet-count { color: #d4d4d8; }
+
+  /* Center Host Matrix */
+  .matrix-card {
+    background: var(--card);
+    border: 1px solid var(--line);
+    border-radius: 16px;
+    overflow: hidden;
+    min-width: 0;
+  }
+  .matrix-bar {
+    padding: 12px 16px;
+    border-bottom: 1px solid var(--line);
+    background: var(--well);
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    justify-content: space-between;
+    gap: 10px;
+  }
+  .active-chips {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 6px;
+  }
+  .filter-tag {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    padding: 3px 10px;
+    border-radius: 999px;
+    background: var(--ink);
+    color: #ffffff;
+    font-size: 12px;
+    border: none;
+    cursor: pointer;
+  }
+  .filter-tag:hover { background: #27272a; }
+  .matrix-meta {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    margin-left: auto;
+    color: var(--muted);
+    font-size: 12.5px;
+  }
+
   .scroll { overflow-x: auto; }
   table { width: 100%; border-collapse: collapse; }
-  th { text-align: left; font-weight: 500; color: var(--muted); font-size: 12.5px; padding: 12px 16px; border-bottom: 1px solid var(--line); white-space: nowrap; background: var(--well); }
-  th button { all: unset; cursor: pointer; display: inline-flex; align-items: center; gap: 4px; color: inherit; font: inherit; }
+  th {
+    text-align: left;
+    font-weight: 600;
+    color: var(--muted);
+    font-size: 12px;
+    padding: 10px 14px;
+    border-bottom: 1px solid var(--line);
+    white-space: nowrap;
+    background: var(--well);
+  }
+  th button {
+    all: unset;
+    cursor: pointer;
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    color: inherit;
+    font: inherit;
+  }
   th button:hover { color: var(--ink); }
   th button:focus-visible { outline: 2px solid var(--ink); outline-offset: 2px; border-radius: 4px; }
   th[data-sort] button::after { content: "↕"; opacity: .45; font-size: 11px; }
@@ -75,108 +445,539 @@
   th[aria-sort="ascending"] button::after { content: "↑"; opacity: 1; }
   th[aria-sort="descending"] { color: var(--ink); }
   th[aria-sort="descending"] button::after { content: "↓"; opacity: 1; }
-  td { padding: 11px 16px; border-bottom: 1px solid var(--line); vertical-align: top; }
-  tr.row { cursor: pointer; }
-  tr.row:hover td { background: var(--well); }
-  tr.row.dead td { color: var(--faint); }
-  .host-cell { display: flex; align-items: baseline; gap: 6px; white-space: nowrap; }
-  .chev { display: inline-block; width: 12px; color: var(--faint); font-size: 11px; transition: transform .15s ease; user-select: none; flex-shrink: 0; }
-  tr.row[aria-expanded="true"] .chev { transform: rotate(90deg); color: var(--ink); }
-  .host { font-weight: 500; }
-  .host .rest { color: var(--faint); font-weight: 400; }
-  .badge { display: inline-block; margin-left: 6px; padding: 1px 8px; border-radius: 999px; border: 1px solid var(--ink); color: var(--ink); font-size: 11px; font-weight: 500; vertical-align: 1px; }
-  .ext-link { display: inline-flex; align-items: center; justify-content: center; width: 20px; height: 20px; border-radius: 6px; color: var(--faint); text-decoration: none; vertical-align: middle; margin-left: 2px; }
-  .ext-link:hover { color: var(--ink); background: rgba(0,0,0,.06); }
-  .title { max-width: 300px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-  .pills { display: flex; flex-wrap: wrap; gap: 4px; max-width: 320px; }
-  .pill { padding: 2px 9px; border-radius: 999px; background: #ededf0; color: var(--ink); font-size: 12px; white-space: nowrap; border: 1px solid transparent; }
-  button.pill { cursor: pointer; }
-  button.pill:hover { border-color: var(--line-strong); background: #e4e4e9; }
-  .pill.more { background: var(--well); color: var(--muted); border-color: var(--line); }
-  .ips { font-size: 12.5px; color: var(--muted); max-width: 200px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-  tr.detail td { background: var(--well); padding: 0 16px 0 34px; }
-  .detail-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(190px, 1fr)); gap: 14px 24px; padding: 16px 0 20px; margin: 0; }
-  .detail-grid dt { color: var(--muted); font-size: 12px; font-weight: 500; }
-  .detail-grid dd { margin: 3px 0 0; overflow-wrap: anywhere; }
-  .empty { padding: 48px 24px; text-align: center; color: var(--muted); display: flex; flex-direction: column; align-items: center; gap: 12px; }
-  .empty[hidden] { display: none; }
-  footer { margin-top: 24px; color: var(--faint); font-size: 12.5px; display: flex; justify-content: space-between; flex-wrap: wrap; gap: 8px; }
 
-  @media (max-width: 720px) {
-    .wrap { padding: 18px 14px 48px; }
-    .surface { padding: 16px; border-radius: 16px; }
-    .tools-right { width: 100%; justify-content: space-between; margin-left: 0; }
+  td {
+    padding: 10px 14px;
+    border-bottom: 1px solid var(--line);
+    vertical-align: middle;
   }
-  @media (prefers-reduced-motion: reduce) { .seg, .key, .chip, .chev { transition: none; } }
+  tr.row { cursor: pointer; transition: background-color .1s ease; }
+  tr.row:hover td { background: var(--well); }
+  tr.row[aria-selected="true"] td {
+    background: #f0f0f4;
+  }
+  tr.row[aria-selected="true"] td:first-child {
+    box-shadow: inset 3px 0 0 var(--ink);
+  }
+  tr.row.dead td { color: var(--faint); }
+
+  .host-wrap {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    white-space: nowrap;
+  }
+  .state-dot {
+    width: 8px;
+    height: 8px;
+    border-radius: 50%;
+    flex-shrink: 0;
+  }
+  .state-dot.exposed { background: var(--ink); }
+  .state-dot.waf { background: var(--waf); }
+  .state-dot.dead { background: var(--dead); }
+  .host-name { font-weight: 600; color: var(--ink); }
+  tr.row.dead .host-name { color: var(--muted); font-weight: 500; }
+  .host-rest { color: var(--faint); font-weight: 400; }
+  .badge-new {
+    display: inline-block;
+    padding: 1px 7px;
+    border-radius: 999px;
+    border: 1px solid var(--ink);
+    color: var(--ink);
+    font-size: 10.5px;
+    font-weight: 600;
+  }
+  .ext-link {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 22px;
+    height: 22px;
+    border-radius: 6px;
+    color: var(--faint);
+    text-decoration: none;
+    flex-shrink: 0;
+  }
+  .ext-link:hover { color: var(--ink); background: var(--well-alt); }
+
+  .status-pill {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    min-width: 40px;
+    padding: 2px 8px;
+    border-radius: 6px;
+    font-size: 12px;
+    font-weight: 600;
+    border: 1px solid var(--line);
+    background: var(--well);
+  }
+  .status-pill.s2 { background: var(--ink); color: #ffffff; border-color: var(--ink); }
+  .status-pill.s3 { background: var(--card); color: var(--ink); border-color: var(--line-strong); }
+  .status-pill.s4, .status-pill.s5 { background: var(--well-alt); color: var(--muted); border-color: var(--line-strong); }
+
+  .title-stack {
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+    max-width: 260px;
+  }
+  .title-main {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    font-weight: 500;
+  }
+  .title-sub {
+    font-size: 11.5px;
+    color: var(--faint);
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .pills { display: flex; flex-wrap: wrap; gap: 4px; max-width: 260px; }
+  .pill {
+    padding: 2px 8px;
+    border-radius: 6px;
+    background: var(--well-alt);
+    color: var(--ink);
+    font-size: 11.5px;
+    white-space: nowrap;
+    border: 1px solid transparent;
+    cursor: pointer;
+  }
+  .pill:hover { border-color: var(--line-strong); }
+  .pill.more { background: var(--well); color: var(--faint); border-color: var(--line); cursor: default; }
+
+  .waf-badge {
+    display: inline-flex;
+    align-items: center;
+    gap: 5px;
+    padding: 2px 8px;
+    border-radius: 6px;
+    background: var(--well);
+    border: 1px solid var(--line);
+    font-size: 12px;
+    font-weight: 500;
+    white-space: nowrap;
+  }
+
+  .ip-stack {
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+    max-width: 165px;
+  }
+  .ip-main {
+    font-size: 12px;
+    color: var(--muted);
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+  .depth-tag {
+    font-size: 11px;
+    color: var(--faint);
+  }
+
+  /* Right Slide-Over Inspector Panel */
+  .inspector {
+    position: sticky;
+    top: 72px;
+    background: var(--card);
+    border: 1px solid var(--line);
+    border-radius: 16px;
+    padding: 18px;
+    max-height: calc(100dvh - 92px);
+    overflow-y: auto;
+    display: flex;
+    flex-direction: column;
+    gap: 16px;
+  }
+  .inspector[hidden] { display: none; }
+  .insp-head {
+    display: flex;
+    align-items: flex-start;
+    justify-content: space-between;
+    gap: 10px;
+    padding-bottom: 14px;
+    border-bottom: 1px solid var(--line);
+  }
+  .insp-host {
+    font-size: 19px;
+    font-weight: 700;
+    letter-spacing: -0.025em;
+    margin: 0 0 6px;
+    overflow-wrap: anywhere;
+  }
+  .insp-badges {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px;
+  }
+  .posture-pill {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    padding: 3px 9px;
+    border-radius: 999px;
+    font-size: 11.5px;
+    font-weight: 600;
+    background: var(--well);
+    border: 1px solid var(--line);
+  }
+  .posture-pill.exposed { background: var(--ink); color: #ffffff; border-color: var(--ink); }
+  .close-btn {
+    width: 28px;
+    height: 28px;
+    border-radius: 999px;
+    border: 1px solid var(--line);
+    background: var(--well);
+    cursor: pointer;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    flex-shrink: 0;
+    font-size: 14px;
+  }
+  .close-btn:hover { border-color: var(--line-strong); }
+
+  .insp-actions {
+    display: flex;
+    gap: 8px;
+  }
+  .insp-actions .btn, .insp-actions a.btn {
+    flex: 1;
+    justify-content: center;
+    text-decoration: none;
+    height: 34px;
+  }
+
+  .assay-tiles {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 8px;
+  }
+  .assay-tile {
+    padding: 10px 12px;
+    border-radius: 12px;
+    background: var(--well);
+    border: 1px solid var(--line);
+  }
+  .assay-label {
+    font-size: 11.5px;
+    color: var(--faint);
+    margin-bottom: 3px;
+  }
+  .assay-val {
+    font-size: 13.5px;
+    font-weight: 600;
+    color: var(--ink);
+    overflow-wrap: anywhere;
+  }
+
+  .insp-sec {
+    border-top: 1px solid var(--line);
+    padding-top: 14px;
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+  }
+  .insp-sec-title {
+    margin: 0;
+    font-size: 15px;
+    font-weight: 600;
+    letter-spacing: -0.015em;
+    color: var(--ink);
+  }
+  .kv-list {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    margin: 0;
+  }
+  .kv-row {
+    display: flex;
+    justify-content: space-between;
+    align-items: baseline;
+    gap: 12px;
+    font-size: 12.5px;
+  }
+  .kv-row dt { color: var(--faint); flex-shrink: 0; }
+  .kv-row dd { margin: 0; text-align: right; overflow-wrap: anywhere; font-weight: 500; }
+
+  .empty {
+    padding: 56px 24px;
+    text-align: center;
+    color: var(--muted);
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 12px;
+  }
+  .empty[hidden] { display: none; }
+
+  footer {
+    margin-top: 24px;
+    padding-top: 16px;
+    border-top: 1px solid var(--line);
+    color: var(--faint);
+    font-size: 12px;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    flex-wrap: wrap;
+    gap: 8px;
+  }
+  .footer-brand {
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
+  }
+  .footer-brand svg {
+    width: 18px;
+    height: 18px;
+    fill: var(--ink);
+    flex-shrink: 0;
+  }
+
+  @media (max-width: 1180px) {
+    .workbench, .workbench.inspector-closed {
+      grid-template-columns: 230px minmax(0, 1fr);
+    }
+    .inspector {
+      position: fixed;
+      right: 16px;
+      top: 76px;
+      bottom: 16px;
+      width: min(380px, calc(100vw - 32px));
+      max-height: none;
+      z-index: 30;
+      box-shadow: 0 20px 50px rgba(0,0,0,.16);
+    }
+  }
+  @media (max-width: 820px) {
+    .kpi-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+    .workbench, .workbench.inspector-closed { grid-template-columns: 1fr; }
+    .facet-rail { position: static; max-height: none; display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); }
+    .topbar-inner, .shell { padding-left: 14px; padding-right: 14px; }
+  }
+  @media (prefers-reduced-motion: reduce) {
+    .kpi-fill, .facet-bar, .btn, .kpi-card, tr.row { transition: none; }
+  }
 </style>
 </head>
 <body>
-<div class="wrap">
-  <header><span class="brand">assfin</span><span id="generated" class="num"></span></header>
-  <h1 id="title"></h1>
-  <p class="sub" id="subtitle"></p>
+<svg xmlns="http://www.w3.org/2000/svg" style="display:none" aria-hidden="true">
+  <symbol id="assfin-fin" viewBox="80 260 864 500">
+    <path d="M259.153 297.582C260.921 297.645 262.691 297.693 264.459 297.779C264.461 297.779 265.75 297.855 265.751 297.855C273.707 298.378 281.66 298.924 289.601 299.634C299.231 300.494 308.815 301.795 318.385 303.175C318.386 303.175 319.323 303.315 319.325 303.316C332.076 305.268 344.709 307.926 357.272 310.855C357.274 310.856 359.268 311.33 359.269 311.331C380.956 316.583 403.274 324.275 423.651 332.517C431.483 335.685 439.104 339.347 446.739 342.966C446.74 342.967 448.907 344.005 448.909 344.005C461.649 350.242 474.116 357.05 486.152 364.556C493.298 369.013 500.564 373.293 507.421 378.183C516.225 384.461 524.93 390.877 533.528 397.435C538.817 401.468 543.905 405.76 549.001 410.035C564.244 422.82 583.277 441.408 596.447 456.393C596.448 456.394 597.674 457.803 597.675 457.804C608.089 470.024 616.944 480.487 626.063 493.35C626.064 493.351 626.946 494.589 626.947 494.59C634.519 505.381 641.706 516.44 648.602 527.675C656.055 539.815 662.664 552.454 669.008 565.209C669.009 565.21 669.743 566.7 669.744 566.702C677.211 582.028 683.459 596.778 689.642 612.802C689.643 612.804 690.181 614.203 690.181 614.204C692.075 619.236 693.947 624.292 695.717 629.369C698.4 637.069 701.285 644.692 703.955 652.395C705.459 656.735 706.747 661.146 707.867 665.601L342.923 665.602C345.307 660.612 348.186 655.876 350.717 650.959C352.931 646.659 354.824 642.164 356.761 637.735C359.698 631.017 362.172 624.179 364.602 617.267C374.531 589.03 378.367 556.542 377.107 526.333C376.67 515.871 375.944 505.398 374.152 495.082C372.678 486.596 371.019 478.142 369.034 469.761C363.19 445.09 353.21 421.573 341.769 398.947C337.318 390.144 331.312 380.221 325.851 371.983C311.93 350.98 293.685 328.635 274.963 311.203C271.258 307.753 267.092 303.637 263.101 300.601C261.324 299.25 260.576 298.833 259.153 297.582Z"/>
+    <path d="M690.647 590.076C692.775 590.252 694.91 590.323 697.039 590.482C711.622 591.576 726.196 592.78 740.743 594.279C740.745 594.279 741.799 594.391 741.801 594.392C749.797 595.271 757.789 596.193 765.768 597.225C765.77 597.225 766.941 597.383 766.942 597.383C780.008 599.18 793.052 601.135 806.063 603.289C806.065 603.29 808.686 603.749 808.688 603.749C814.957 604.894 821.214 606.105 827.448 607.431C827.449 607.432 829.005 607.769 829.007 607.769C847.204 611.801 871.109 617.759 888.422 625.007C899.571 629.674 912.557 635.711 920.277 645.4C925.198 651.577 925.95 659.785 922.153 666.759C917.428 675.437 902.786 683.571 894.062 687.352C877.188 694.666 859.558 699.856 841.663 703.981C828.821 706.941 815.904 709.587 802.893 711.683C802.892 711.683 801.486 711.907 801.484 711.907C787.724 714.039 773.937 715.996 760.129 717.784C756.765 718.219 753.398 718.628 750.024 718.972C731.013 720.912 711.975 722.576 692.927 724.113C687.963 724.513 682.977 724.569 678.006 724.888C662.434 725.887 646.832 726.351 631.247 727.103C631.246 727.103 630.309 727.142 630.307 727.142C629.329 727.178 628.35 727.211 627.37 727.237C614.842 727.569 602.306 728.005 589.775 728.2C589.773 728.2 588.132 728.223 588.13 728.223C567.572 728.484 547.011 728.521 526.451 728.52C526.449 728.52 520.226 728.515 520.224 728.515C514.508 728.503 508.786 728.527 503.071 728.475C487.721 728.337 472.366 728.32 457.017 728.114C457.015 728.114 455.374 728.089 455.372 728.089C439.55 727.827 423.726 727.607 407.908 727.142C407.906 727.142 406.735 727.104 406.733 727.103C398.237 726.762 389.735 726.583 381.239 726.224C381.237 726.224 380.164 726.171 380.163 726.171C380.161 726.171 379.009 726.11 379.007 726.109C367.578 725.377 356.134 724.902 344.701 724.221C344.7 724.221 343.646 724.149 343.644 724.149C326.133 722.906 308.62 721.726 291.128 720.236C291.126 720.236 289.838 720.118 289.836 720.117C282.508 719.372 275.183 718.593 267.866 717.749C267.864 717.748 266.34 717.567 266.339 717.567C229.048 713.085 192.805 707.6 156.823 697.279C141.298 692.825 121.257 685.929 108.574 675.507C102.442 670.467 96.7298 662.501 99.7498 654.198C106.282 636.239 146.235 624.305 162.599 620.165C167.105 619.025 171.629 617.956 176.161 616.925C176.162 616.925 177.518 616.618 177.52 616.618C198.499 611.921 215.567 609.038 236.732 606.211C236.734 606.211 237.482 606.112 237.484 606.112C248.923 604.667 260.384 603.39 271.861 602.277C271.862 602.277 273.151 602.156 273.153 602.156C287.937 600.826 302.754 599.903 317.562 598.869C317.564 598.869 318.853 598.79 318.855 598.789C319.442 598.756 320.029 598.731 320.617 598.707C333.281 598.204 345.977 597.076 358.654 597.169C357.414 604.833 353 618.05 350.299 625.02C347.678 631.787 344.6 638.371 341.352 644.86C337.558 652.44 333.06 660.933 328.229 667.893C326.133 670.912 323.924 673.851 321.798 676.85C325.229 676.728 328.698 676.902 332.13 676.929C365.923 677.201 399.726 676.773 433.52 676.796C490.499 676.834 547.482 676.739 604.461 676.923C604.463 676.923 608.336 676.937 608.338 676.937C624.895 677.012 644.757 677.494 661.871 677.066C680.349 676.605 698.866 675.806 717.129 672.96C729.86 670.975 752.006 666.338 762.985 659.456C764.899 658.256 768.836 655.852 766.832 653.199C762.096 646.927 744.172 642.11 737.102 640.48C727.088 638.171 716.894 636.761 706.715 635.353L703.959 624.914C706.737 625.256 709.534 625.405 712.312 625.744C723.479 627.108 734.542 629.28 745.443 632.06C754.238 634.303 764.813 637.114 771.748 643.374C775.526 646.785 777.755 649.886 777.638 655.097C777.38 666.596 759.823 673.159 750.965 676.017C732.161 682.084 710.687 684.547 691.517 686.11C683.081 686.798 673.243 686.906 664.731 687.076C652.553 687.321 640.372 687.035 628.193 686.895C624.947 686.858 621.681 686.695 618.439 686.686C616.865 686.681 610.032 690.585 609.624 690.797C604.814 693.299 599.866 695.535 595.087 698.087C595.746 698.046 596.399 698.008 597.059 697.991C613.229 697.57 629.41 697.568 645.581 697.125C645.582 697.125 646.989 697.083 646.99 697.083C660.549 696.638 674.098 695.983 687.64 695.193C687.642 695.193 689.283 695.081 689.285 695.081C702.54 694.099 715.781 692.91 728.995 691.475C728.996 691.475 730.168 691.343 730.17 691.343C736.095 690.65 742.004 689.828 747.91 688.981C747.912 688.981 748.848 688.843 748.85 688.842C758.241 687.417 767.602 685.797 776.929 683.995C793.357 680.82 821.36 673.977 834.85 663.784C838.627 660.93 842.693 657.473 838.666 652.934C830.922 644.208 809.477 637.427 798.721 634.553C794.083 633.314 789.43 632.132 784.767 630.993C763.392 625.776 741.538 622.823 719.713 620.032C713.531 619.242 707.328 618.594 701.108 618.206C700.992 617.732 700.858 617.263 700.716 616.797C699.326 612.231 698.826 611.861 697.771 607.618C705.992 608.409 714.207 609.255 722.415 610.161C722.417 610.161 723.119 610.241 723.121 610.241C745.311 612.854 767.478 616.044 789.172 621.395C798.031 623.581 806.912 625.954 815.581 628.8C828.254 632.959 857.736 644.436 848.845 663.169C841.547 678.544 809.61 686.956 794.904 690.657C783.583 693.506 772.147 695.896 760.62 697.743C760.619 697.744 759.22 697.962 759.218 697.963C749.911 699.349 740.58 700.565 731.242 701.723C731.24 701.723 729.181 701.965 729.179 701.965C725.322 702.369 721.461 702.736 717.599 703.089C717.597 703.089 716.073 703.218 716.071 703.219C714.582 703.33 713.095 703.46 711.607 703.585C699.708 704.59 687.811 705.411 675.892 706.126C675.89 706.126 674.407 706.203 674.405 706.203C665.428 706.629 656.442 706.808 647.46 707.11C647.459 707.11 646.17 707.145 646.168 707.145C635.361 707.395 624.551 707.492 613.742 707.489C613.74 707.489 611.394 707.486 611.392 707.486C606.73 707.474 602.068 707.437 597.407 707.375C590.796 707.286 584.166 707.029 577.557 707.028C575.275 707.028 573.001 707.384 570.841 708.117C567.862 709.128 564.921 710.25 561.931 711.229C561.929 711.229 560.759 711.606 560.757 711.607C556.091 713.08 551.398 714.472 546.658 715.684C542.548 716.736 538.405 717.644 534.291 718.68C534.292 718.68 535.425 718.742 535.426 718.742C536.271 718.783 537.118 718.781 537.964 718.786C557.214 718.902 576.765 718.582 595.884 718.165C597.177 718.137 598.469 718.103 599.761 718.053C609.627 717.671 619.499 717.514 629.368 717.213C629.369 717.213 630.658 717.171 630.66 717.171C644.335 716.682 657.997 715.926 671.662 715.206C671.664 715.205 672.6 715.152 672.602 715.152C687.063 714.291 701.513 713.253 715.954 712.098C715.956 712.098 717.479 711.972 717.481 711.972C730.895 710.765 744.288 709.336 757.661 707.744C757.663 707.744 758.482 707.643 758.484 707.643C769.745 706.26 780.989 704.742 792.202 703.018C808.285 700.546 824.252 697.365 840.136 693.834C846.528 692.412 852.884 690.817 859.168 688.973C872.824 684.965 891.466 678.902 903.342 670.957C915.637 662.732 919.606 655.644 906.75 646.151C898.002 639.692 885.167 633.993 874.886 630.551C847.391 621.348 818.798 615.882 790.205 611.079C790.203 611.079 788.914 610.869 788.913 610.868C780.224 609.504 771.521 608.238 762.809 607.036C762.807 607.036 762.01 606.931 762.008 606.931C756.038 606.193 750.057 605.545 744.074 604.927C744.072 604.927 742.39 604.766 742.388 604.765C726.573 603.269 710.737 602.018 694.91 600.655L690.647 590.076Z"/>
+  </symbol>
+</svg>
 
-  <section class="surface" aria-label="Attack surface">
-    <div class="bar" role="img" id="bar">
-      <div class="seg exposed" id="seg-exposed"></div><div class="seg waf" id="seg-waf"></div><div class="seg dead" id="seg-dead"></div>
+<header class="topbar">
+  <div class="topbar-inner">
+    <div class="brand-cluster">
+      <span class="brand-mark"><span class="brand-logo"><svg aria-hidden="true"><use href="#assfin-fin"/></svg></span>assfin</span>
+      <h1 id="title"></h1>
+      <div class="meta-pills" id="subtitle"></div>
+      <span class="meta-pill num" id="generated"></span>
     </div>
-    <div class="legend">
-      <button class="key" type="button" data-key="exposed" aria-pressed="false"><span class="dot exposed"></span><span class="num" id="n-exposed"></span><small>reachable, no WAF</small></button>
-      <button class="key" type="button" data-key="waf" aria-pressed="false"><span class="dot waf"></span><span class="num" id="n-waf"></span><small>behind WAF</small></button>
-      <button class="key" type="button" data-key="dead" aria-pressed="false"><span class="dot dead"></span><span class="num" id="n-dead"></span><small>no response</small></button>
-      <button class="key" type="button" data-key="new" aria-pressed="false"><span class="dot new"></span><span class="num" id="n-new"></span><small>new this scan</small></button>
+
+    <div class="command-cluster">
+      <div class="search-wrap">
+        <input class="search" id="q" type="search" placeholder="Filter host, title, tech, WAF, IP" aria-label="Search hosts">
+        <span class="kbd-hint num">/</span>
+      </div>
+      <select class="btn" id="root" aria-label="Root domain" data-active="false" hidden><option value="">All roots</option></select>
+      <select class="btn" id="tech" aria-label="Technology" data-active="false"><option value="">Any tech</option></select>
+      <button class="btn" type="button" id="reset" hidden>Reset</button>
+      <button class="btn" type="button" id="copy-urls" title="Copy live HTTP/HTTPS URLs in current view">Copy URLs</button>
+      <button class="btn primary" type="button" id="copy-hosts" title="Copy hostnames in current view">Copy hosts</button>
     </div>
+  </div>
+</header>
+
+<div class="shell">
+  <section class="kpi-grid" aria-label="Attack surface posture">
+    <button class="kpi-card" type="button" data-key="exposed" aria-pressed="false">
+      <div class="kpi-top">
+        <span class="kpi-title"><span class="kpi-dot exposed"></span>Reachable · No WAF</span>
+        <span class="kpi-pct num" id="pct-exposed">0%</span>
+      </div>
+      <div class="kpi-val num" id="n-exposed">0</div>
+      <div class="kpi-track"><div class="kpi-fill exposed" id="seg-exposed"></div></div>
+    </button>
+
+    <button class="kpi-card" type="button" data-key="waf" aria-pressed="false">
+      <div class="kpi-top">
+        <span class="kpi-title"><span class="kpi-dot waf"></span>Behind WAF</span>
+        <span class="kpi-pct num" id="pct-waf">0%</span>
+      </div>
+      <div class="kpi-val num" id="n-waf">0</div>
+      <div class="kpi-track"><div class="kpi-fill waf" id="seg-waf"></div></div>
+    </button>
+
+    <button class="kpi-card" type="button" data-key="dead" aria-pressed="false">
+      <div class="kpi-top">
+        <span class="kpi-title"><span class="kpi-dot dead"></span>No Response</span>
+        <span class="kpi-pct num" id="pct-dead">0%</span>
+      </div>
+      <div class="kpi-val num" id="n-dead">0</div>
+      <div class="kpi-track"><div class="kpi-fill dead" id="seg-dead"></div></div>
+    </button>
+
+    <button class="kpi-card" type="button" data-key="new" aria-pressed="false">
+      <div class="kpi-top">
+        <span class="kpi-title"><span class="kpi-dot new"></span>New This Scan</span>
+        <span class="kpi-pct num" id="pct-new">0%</span>
+      </div>
+      <div class="kpi-val num" id="n-new">0</div>
+      <div class="kpi-track"><div class="kpi-fill" id="seg-new"></div></div>
+    </button>
   </section>
 
-  <div class="tools">
-    <input class="search" id="q" type="search" placeholder="Search host, title, tech, IP (press /)" aria-label="Search hosts">
-    <button class="chip" type="button" data-status="2" aria-pressed="false">2xx</button>
-    <button class="chip" type="button" data-status="3" aria-pressed="false">3xx</button>
-    <button class="chip" type="button" data-status="4" aria-pressed="false">4xx</button>
-    <button class="chip" type="button" data-status="5" aria-pressed="false">5xx</button>
-    <select class="chip" id="tech" aria-label="Technology" data-active="false"><option value="">Any tech</option></select>
-    <select class="chip" id="root" aria-label="Root domain" data-active="false" hidden><option value="">All roots</option></select>
-    <button class="chip ghost" type="button" id="reset" hidden>Reset filters</button>
-    <div class="tools-right">
-      <span class="count num" id="count" aria-live="polite"></span>
-      <button class="chip" type="button" id="copy-hosts" title="Copy matching hostnames to clipboard">Copy hosts</button>
-    </div>
+  <div class="workbench" id="workbench">
+    <aside class="facet-rail" aria-label="Telemetry facets">
+      <section class="facet-card">
+        <div class="facet-head"><span>HTTP Status</span><span class="faint num">class</span></div>
+        <div class="facet-list" id="facet-status">
+          <button class="facet-btn" type="button" data-status="2" aria-pressed="false">
+            <span class="facet-bar" id="fbar-s2"></span>
+            <span class="facet-name num">2xx OK</span>
+            <span class="facet-count num" id="fcnt-s2">0</span>
+          </button>
+          <button class="facet-btn" type="button" data-status="3" aria-pressed="false">
+            <span class="facet-bar" id="fbar-s3"></span>
+            <span class="facet-name num">3xx Redirect</span>
+            <span class="facet-count num" id="fcnt-s3">0</span>
+          </button>
+          <button class="facet-btn" type="button" data-status="4" aria-pressed="false">
+            <span class="facet-bar" id="fbar-s4"></span>
+            <span class="facet-name num">4xx Client / Auth</span>
+            <span class="facet-count num" id="fcnt-s4">0</span>
+          </button>
+          <button class="facet-btn" type="button" data-status="5" aria-pressed="false">
+            <span class="facet-bar" id="fbar-s5"></span>
+            <span class="facet-name num">5xx Server Err</span>
+            <span class="facet-count num" id="fcnt-s5">0</span>
+          </button>
+        </div>
+      </section>
+
+      <section class="facet-card">
+        <div class="facet-head"><span>WAF Vendors</span><span class="faint num">edge</span></div>
+        <div class="facet-list" id="facet-waf"></div>
+      </section>
+
+      <section class="facet-card">
+        <div class="facet-head"><span>Top Technologies</span><span class="faint num">stack</span></div>
+        <div class="facet-list" id="facet-tech"></div>
+      </section>
+
+      <section class="facet-card">
+        <div class="facet-head"><span>Recursion Depth</span><span class="faint num">bfs</span></div>
+        <div class="facet-list" id="facet-depth"></div>
+      </section>
+    </aside>
+
+    <main class="matrix-card" aria-label="Discovered hosts">
+      <div class="matrix-bar">
+        <div class="active-chips" id="active-chips"></div>
+        <div class="matrix-meta">
+          <span class="num" id="count" aria-live="polite"></span>
+          <button class="btn" type="button" id="toggle-inspector" hidden>Show inspector</button>
+        </div>
+      </div>
+
+      <div class="scroll">
+        <table>
+          <thead><tr>
+            <th data-sort="host"><button type="button">Subdomain</button></th>
+            <th data-sort="status"><button type="button">Status</button></th>
+            <th data-sort="title"><button type="button">Title &amp; Server</button></th>
+            <th>Technologies</th>
+            <th data-sort="waf"><button type="button">WAF</button></th>
+            <th data-sort="ips"><button type="button">IP</button></th>
+            <th data-sort="depth"><button type="button">Depth</button></th>
+          </tr></thead>
+          <tbody id="rows"></tbody>
+        </table>
+      </div>
+
+      <div class="empty" id="empty" hidden>
+        <span>No hosts match the active filters.</span>
+        <button class="btn primary" type="button" id="empty-reset">Reset all filters</button>
+      </div>
+    </main>
+
+    <aside class="inspector" id="inspector" aria-label="Host dossier">
+      <div class="insp-head">
+        <div>
+          <h2 class="insp-host" id="insp-host">Select a host</h2>
+          <div class="insp-badges" id="insp-badges"></div>
+        </div>
+        <button class="close-btn" type="button" id="close-inspector" title="Close inspector panel" aria-label="Close inspector panel">×</button>
+      </div>
+
+      <div class="insp-actions" id="insp-actions"></div>
+
+      <div class="assay-tiles" id="insp-tiles"></div>
+
+      <div class="insp-sec" id="insp-net-sec">
+        <h3 class="insp-sec-title">Network &amp; HTTP Telemetry</h3>
+        <dl class="kv-list" id="insp-net"></dl>
+      </div>
+
+      <div class="insp-sec" id="insp-tech-sec">
+        <h3 class="insp-sec-title">Fingerprinted Technologies</h3>
+        <div class="pills" id="insp-tech"></div>
+      </div>
+
+      <div class="insp-sec" id="insp-prov-sec">
+        <h3 class="insp-sec-title">Discovery Provenance</h3>
+        <dl class="kv-list" id="insp-prov"></dl>
+      </div>
+    </aside>
   </div>
 
-  <div class="table-card">
-    <div class="scroll">
-      <table>
-        <thead><tr>
-          <th data-sort="host"><button type="button">Host</button></th>
-          <th data-sort="status"><button type="button">Status</button></th>
-          <th data-sort="title"><button type="button">Title</button></th>
-          <th>Tech</th>
-          <th data-sort="waf"><button type="button">WAF</button></th>
-          <th data-sort="ips"><button type="button">IP</button></th>
-          <th data-sort="depth"><button type="button">Depth</button></th>
-        </tr></thead>
-        <tbody id="rows"></tbody>
-      </table>
-    </div>
-    <div class="empty" id="empty" hidden>
-      <span>No hosts match the active filters.</span>
-      <button class="chip" type="button" id="empty-reset">Reset all filters</button>
-    </div>
-  </div>
   <footer>
-    <span>Passive enumeration by subfinder, probing by httpx.</span>
-    <span>Click any row to inspect telemetry · Press <kbd class="num">/</kbd> to search</span>
+    <span class="footer-brand"><svg aria-hidden="true"><use href="#assfin-fin"/></svg>assfin passive subdomain reconnaissance &amp; WAF-safe probing workbench</span>
+    <span>Keys: <kbd class="num">/</kbd> search · <kbd class="num">j</kbd>/<kbd class="num">k</kbd> step hosts · <kbd class="num">Esc</kbd> clear</span>
   </footer>
 </div>
 
 <script>
 const DATA = {{ .DataJSON }};
 (() => {
+  const sym = document.getElementById("assfin-fin");
+  if (sym) {
+    const fav = document.createElement("link");
+    fav.rel = "icon";
+    fav.type = "image/svg+xml";
+    const svgStr = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1024 1024"><rect width="1024" height="1024" rx="220" fill="#ffffff"/>${sym.innerHTML}</svg>`;
+    fav.href = "data:image/svg+xml," + encodeURIComponent(svgStr);
+    document.head.append(fav);
+  }
   const $ = (id) => document.getElementById(id);
   const fmt = new Intl.NumberFormat();
   const hosts = DATA.hosts || [];
   const rootsData = DATA.roots || [];
-  const state = { q: "", key: "", status: new Set(), tech: "", root: "", sort: "depth", dir: 1, open: new Set() };
+  const state = {
+    q: "",
+    key: "",
+    status: new Set(),
+    tech: "",
+    wafVendor: "",
+    depthFilter: null,
+    root: "",
+    sort: "depth",
+    dir: 1,
+    selected: null,
+    inspectorOpen: true
+  };
   let currentList = [];
 
   const el = (tag, cls, text) => {
@@ -191,29 +992,8 @@ const DATA = {{ .DataJSON }};
 
   hosts.forEach(h => {
     h.tech = h.tech || [];
-    h._text = [h.host, h.title, h.tech.join(" "), h.ips, h.waf, h.server].join(" ").toLowerCase();
+    h._text = [h.host, h.title, h.tech.join(" "), h.ips, h.waf, h.server, h.cdn].join(" ").toLowerCase();
   });
-
-  function makeClockIcon() {
-    const svg = document.createElementNS(svgNS, "svg");
-    svg.setAttribute("width", "12");
-    svg.setAttribute("height", "12");
-    svg.setAttribute("viewBox", "0 0 24 24");
-    svg.setAttribute("fill", "none");
-    svg.setAttribute("stroke", "currentColor");
-    svg.setAttribute("stroke-width", "2");
-    svg.setAttribute("stroke-linecap", "round");
-    svg.setAttribute("stroke-linejoin", "round");
-    svg.setAttribute("aria-hidden", "true");
-    const circle = document.createElementNS(svgNS, "circle");
-    circle.setAttribute("cx", "12");
-    circle.setAttribute("cy", "12");
-    circle.setAttribute("r", "10");
-    const poly = document.createElementNS(svgNS, "polyline");
-    poly.setAttribute("points", "12 6 12 12 16 14");
-    svg.append(circle, poly);
-    return svg;
-  }
 
   function makeExtIcon() {
     const svg = document.createElementNS(svgNS, "svg");
@@ -262,72 +1042,172 @@ const DATA = {{ .DataJSON }};
     const sub = $("subtitle");
     sub.replaceChildren();
 
-    sub.append(el("span", "num", fmt.format(hostCount)), document.createTextNode(" subdomains found"));
-    if (lastDate) {
-      sub.append(document.createTextNode(", last scanned " + new Date(lastDate).toLocaleString()));
-    }
+    const pCount = el("span", "meta-pill");
+    pCount.append(el("strong", "num", fmt.format(hostCount)), document.createTextNode(" subdomains"));
+    sub.append(pCount);
+
     if (dur) {
-      const badge = el("span", "dur-badge");
-      badge.append(makeClockIcon(), el("span", "num", dur));
-      badge.title = "Total scan elapsed duration";
-      sub.append(badge);
+      const pDur = el("span", "meta-pill");
+      pDur.append(document.createTextNode("Scan "), el("strong", "num", dur));
+      pDur.title = "Total scan elapsed duration";
+      sub.append(pDur);
+    }
+    if (lastDate) {
+      sub.append(el("span", "meta-pill num", new Date(lastDate).toLocaleString()));
     }
   }
 
-  function updateSurfaceAndTech() {
+  function buildFacetRow(label, count, total, isActive, onClick) {
+    const btn = el("button", "facet-btn");
+    btn.type = "button";
+    btn.setAttribute("aria-pressed", String(isActive));
+    const bar = el("span", "facet-bar");
+    bar.style.width = (total > 0 ? (count / total * 100) : 0) + "%";
+    const name = el("span", "facet-name", label);
+    const cnt = el("span", "facet-count num", fmt.format(count));
+    btn.append(bar, name, cnt);
+    btn.addEventListener("click", onClick);
+    return btn;
+  }
+
+  function updateSurfaceAndFacets() {
     const scoped = state.root ? hosts.filter(h => h.root === state.root) : hosts;
+    const total = scoped.length || 1;
     const counts = { exposed: 0, waf: 0, dead: 0, new: 0 };
+    const statusCounts = { "2": 0, "3": 0, "4": 0, "5": 0 };
     const techCount = {};
+    const wafCount = {};
+    const depthCount = {};
 
     scoped.forEach(h => {
       counts[kind(h)]++;
       if (h.new) counts.new++;
+      if (h.alive && h.status) {
+        const sc = String(h.status)[0];
+        if (statusCounts[sc] != null) statusCounts[sc]++;
+      }
+      if (h.alive) {
+        const wKey = h.waf ? h.waf : "No WAF (Exposed)";
+        wafCount[wKey] = (wafCount[wKey] || 0) + 1;
+      }
       h.tech.forEach(t => { techCount[t] = (techCount[t] || 0) + 1; });
+      const dKey = h.depth || 0;
+      depthCount[dKey] = (depthCount[dKey] || 0) + 1;
     });
 
     ["exposed", "waf", "dead", "new"].forEach(k => {
       $("n-" + k).textContent = fmt.format(counts[k]);
-    });
-    $("bar").setAttribute("aria-label", `${counts.exposed} reachable without WAF, ${counts.waf} behind WAF, ${counts.dead} no response`);
-
-    const total = scoped.length || 1;
-    ["exposed", "waf", "dead"].forEach(k => {
+      const pct = scoped.length ? Math.round((counts[k] / total) * 100) : 0;
+      $("pct-" + k).textContent = pct + "%";
       $("seg-" + k).style.width = (counts[k] / total * 100) + "%";
     });
 
+    ["2", "3", "4", "5"].forEach(s => {
+      $("fcnt-s" + s).textContent = fmt.format(statusCounts[s]);
+      $("fbar-s" + s).style.width = (statusCounts[s] / total * 100) + "%";
+    });
+
+    // WAF Facet list
+    const wafBox = $("facet-waf");
+    wafBox.replaceChildren();
+    const wafEntries = Object.entries(wafCount).sort((a, b) => b[1] - a[1]);
+    if (!wafEntries.length) {
+      wafBox.append(el("span", "faint", "No live HTTP responses"));
+    } else {
+      wafEntries.forEach(([w, c]) => {
+        wafBox.append(buildFacetRow(w, c, total, state.wafVendor === w, () => {
+          state.wafVendor = state.wafVendor === w ? "" : w;
+          if (state.wafVendor && state.key === "dead") state.key = "";
+          render();
+        }));
+      });
+    }
+
+    // Top Tech Facet list + Dropdown
     const techSel = $("tech");
     const prevTech = state.tech;
     techSel.replaceChildren(new Option("Any tech", ""));
-    Object.entries(techCount)
-      .sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0]))
-      .forEach(([t, n]) => techSel.append(new Option(`${t} (${n})`, t)));
-
+    const sortedTech = Object.entries(techCount).sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0]));
+    sortedTech.forEach(([t, n]) => techSel.append(new Option(`${t} (${n})`, t)));
     if (prevTech && techCount[prevTech]) {
       techSel.value = prevTech;
     } else {
       state.tech = "";
       techSel.value = "";
     }
-    techSel.dataset.active = String(Boolean(state.tech));
+
+    const techBox = $("facet-tech");
+    techBox.replaceChildren();
+    if (!sortedTech.length) {
+      techBox.append(el("span", "faint", "No technologies detected"));
+    } else {
+      sortedTech.slice(0, 8).forEach(([t, c]) => {
+        techBox.append(buildFacetRow(t, c, total, state.tech === t, () => {
+          state.tech = state.tech === t ? "" : t;
+          render();
+        }));
+      });
+    }
+
+    // Recursion Depth Facet list
+    const depthBox = $("facet-depth");
+    depthBox.replaceChildren();
+    Object.entries(depthCount)
+      .sort((a, b) => Number(a[0]) - Number(b[0]))
+      .forEach(([d, c]) => {
+        const dNum = Number(d);
+        const label = dNum === 0 ? "Depth 0 · Root" : `Depth ${dNum} · Subdomain`;
+        depthBox.append(buildFacetRow(label, c, total, state.depthFilter === dNum, () => {
+          state.depthFilter = state.depthFilter === dNum ? null : dNum;
+          render();
+        }));
+      });
   }
 
   const roots = rootsData.map(r => r.root);
   $("title").textContent = roots.length === 1 ? roots[0] : roots.length + " root domains";
-  $("generated").textContent = "Report " + new Date(DATA.generated).toLocaleString();
+  $("generated").textContent = "Generated " + new Date(DATA.generated).toLocaleString();
   if (roots.length > 1) {
     $("root").hidden = false;
     roots.forEach(r => $("root").append(new Option(r, r)));
   }
 
-  updateSubtitle();
-  requestAnimationFrame(() => updateSurfaceAndTech());
-
   function hasActiveFilters() {
-    return Boolean(state.q || state.key || state.status.size || state.tech || state.root);
+    return Boolean(
+      state.q ||
+      state.key ||
+      state.status.size ||
+      state.tech ||
+      state.wafVendor ||
+      state.depthFilter !== null ||
+      state.root
+    );
   }
 
-  function syncFilterControls() {
-    document.querySelectorAll(".key").forEach(k => {
+  function renderActiveChips() {
+    const box = $("active-chips");
+    box.replaceChildren();
+    const addChip = (label, onClear) => {
+      const btn = el("button", "filter-tag", label + " ×");
+      btn.type = "button";
+      btn.title = "Remove filter " + label;
+      btn.addEventListener("click", onClear);
+      box.append(btn);
+    };
+    if (state.root) addChip("Root: " + state.root, () => { state.root = ""; updateSubtitle(); render(); });
+    if (state.key) addChip("Posture: " + state.key, () => { state.key = ""; render(); });
+    state.status.forEach(s => addChip(s + "xx", () => { state.status.delete(s); render(); }));
+    if (state.wafVendor) addChip("WAF: " + state.wafVendor, () => { state.wafVendor = ""; render(); });
+    if (state.tech) addChip("Tech: " + state.tech, () => { state.tech = ""; render(); });
+    if (state.depthFilter !== null) addChip("Depth " + state.depthFilter, () => { state.depthFilter = null; render(); });
+    if (state.q) addChip('"' + state.q + '"', () => { state.q = ""; $("q").value = ""; render(); });
+    if (!box.childNodes.length) {
+      box.append(el("span", "faint", "All discovered assets in scope"));
+    }
+  }
+
+  function syncControls() {
+    document.querySelectorAll(".kpi-card").forEach(k => {
       k.setAttribute("aria-pressed", String(k.dataset.key === state.key));
     });
     document.querySelectorAll("[data-status]").forEach(b => {
@@ -338,13 +1218,23 @@ const DATA = {{ .DataJSON }};
     $("root").value = state.root;
     $("root").dataset.active = String(Boolean(state.root));
     $("reset").hidden = !hasActiveFilters();
+    $("workbench").classList.toggle("inspector-closed", !state.inspectorOpen);
+    $("inspector").hidden = !state.inspectorOpen;
+    $("toggle-inspector").hidden = state.inspectorOpen;
+    renderActiveChips();
   }
 
   function matches(h) {
     if (state.root && h.root !== state.root) return false;
     if (state.key === "new" ? !h.new : state.key && kind(h) !== state.key) return false;
     if (state.status.size && !(h.alive && state.status.has(String(h.status)[0]))) return false;
+    if (state.wafVendor) {
+      if (!h.alive) return false;
+      const wKey = h.waf ? h.waf : "No WAF (Exposed)";
+      if (wKey !== state.wafVendor) return false;
+    }
     if (state.tech && !h.tech.includes(state.tech)) return false;
+    if (state.depthFilter !== null && (h.depth || 0) !== state.depthFilter) return false;
     return !state.q || state.q.split(/\s+/).every(w => h._text.includes(w));
   }
 
@@ -377,79 +1267,161 @@ const DATA = {{ .DataJSON }};
     return (r || a.host.localeCompare(b.host)) * state.dir;
   }
 
-  function detail(h) {
-    const tr = el("tr", "detail"), td = el("td");
-    td.colSpan = 7;
-    const dl = el("dl", "detail-grid");
-    const add = (k, v, cls) => {
-      if (!v && v !== 0) return;
-      const d = el("div");
-      d.append(el("dt", null, k));
-      const dd = el("dd", cls);
-      typeof v === "string" ? dd.textContent = v : dd.append(v);
-      d.append(dd);
-      dl.append(d);
+  function renderInspector(h) {
+    if (!h) {
+      $("insp-host").textContent = "No host selected";
+      $("insp-badges").replaceChildren();
+      $("insp-actions").replaceChildren();
+      $("insp-tiles").replaceChildren();
+      $("insp-net").replaceChildren();
+      $("insp-tech").replaceChildren();
+      $("insp-prov").replaceChildren();
+      return;
+    }
+
+    $("insp-host").textContent = h.host;
+    const badges = $("insp-badges");
+    badges.replaceChildren();
+    const k = kind(h);
+    const pLabel = k === "exposed" ? "Reachable · No WAF" : k === "waf" ? "Behind WAF (" + h.waf + ")" : "No HTTP Response";
+    const pPill = el("span", "posture-pill " + k, pLabel);
+    badges.append(pPill);
+    if (h.new) badges.append(el("span", "badge-new", "new this scan"));
+
+    // Actions
+    const actions = $("insp-actions");
+    actions.replaceChildren();
+    const copyBtn = el("button", "btn", "Copy hostname");
+    copyBtn.type = "button";
+    copyBtn.addEventListener("click", async () => {
+      try {
+        await navigator.clipboard.writeText(h.host);
+        copyBtn.textContent = "Copied";
+        setTimeout(() => { copyBtn.textContent = "Copy hostname"; }, 1400);
+      } catch (_) {}
+    });
+    actions.append(copyBtn);
+
+    if (h.alive && /^https?:\/\//i.test(h.url)) {
+      const openA = el("a", "btn primary", "Open target");
+      openA.href = h.url;
+      openA.target = "_blank";
+      openA.rel = "noopener noreferrer";
+      openA.append(makeExtIcon());
+      actions.append(openA);
+    }
+
+    // 4 Assay Tiles
+    const tiles = $("insp-tiles");
+    tiles.replaceChildren();
+    const addTile = (lbl, val, isMono) => {
+      const t = el("div", "assay-tile");
+      t.append(el("div", "assay-label", lbl), el("div", "assay-val" + (isMono ? " num" : ""), val));
+      tiles.append(t);
     };
-    if (/^https?:\/\//i.test(h.url)) {
+    addTile("HTTP Status", h.alive ? String(h.status) : "Unreachable", true);
+    addTile("WAF / Edge", h.waf || (h.alive ? "None detected" : "–"), false);
+    addTile("Response Size", h.alive ? fmt.format(h.length || 0) + " B" : "–", true);
+    addTile("Recursion Depth", "Depth " + (h.depth || 0), true);
+
+    // Network KV
+    const net = $("insp-net");
+    net.replaceChildren();
+    const addKV = (target, kText, vNode, isMono) => {
+      if (!vNode && vNode !== 0) return;
+      const row = el("div", "kv-row");
+      row.append(el("dt", null, kText));
+      const dd = el("dd", isMono ? "num" : "");
+      typeof vNode === "string" ? dd.textContent = vNode : dd.append(vNode);
+      row.append(dd);
+      target.append(row);
+    };
+    if (h.title) addKV(net, "Page Title", h.title, false);
+    if (h.alive && /^https?:\/\//i.test(h.url)) {
       const a = el("a", "num", h.url);
       a.href = h.url;
       a.target = "_blank";
       a.rel = "noopener noreferrer";
-      add("URL", a);
+      addKV(net, "Target URL", a, true);
     }
-    add("Probe status", h.alive ? `HTTP ${h.status}` : "No HTTP response", h.alive ? "num" : null);
-    add("Server", h.server);
-    add("CDN", h.cdn);
-    if (h.alive || h.waf) add("WAF", h.waf || "none detected");
-    if (h.tech.length > 0) add("Technologies", h.tech.join(", "));
-    add("IPs", h.ips, "num");
-    add("Content length", h.alive ? fmt.format(h.length) + " bytes" : "", "num");
-    add("Sources", h.sources ? h.sources.split(",").join(", ") : "");
-    if (h.first_seen) add("First seen", new Date(h.first_seen).toLocaleString(), "num");
-    if (h.last_seen) add("Last seen", new Date(h.last_seen).toLocaleString(), "num");
-    td.append(dl);
-    tr.append(td);
-    return tr;
+    addKV(net, "Server Banner", h.server || "–", true);
+    addKV(net, "CDN Provider", h.cdn || "–", false);
+    addKV(net, "Resolved IPs", h.ips || "–", true);
+
+    // Tech stack
+    const techBox = $("insp-tech");
+    techBox.replaceChildren();
+    if (!h.tech.length) {
+      techBox.append(el("span", "faint", "No technologies fingerprinted"));
+    } else {
+      h.tech.forEach(t => {
+        const b = el("button", "pill", t);
+        b.type = "button";
+        b.title = "Filter workbench by " + t;
+        b.addEventListener("click", () => {
+          state.tech = state.tech === t ? "" : t;
+          render();
+        });
+        techBox.append(b);
+      });
+    }
+
+    // Provenance
+    const prov = $("insp-prov");
+    prov.replaceChildren();
+    addKV(prov, "Root Domain", h.root, true);
+    addKV(prov, "Passive Sources", h.sources ? h.sources.split(",").join(", ") : "subfinder", false);
+    if (h.first_seen) addKV(prov, "First Seen", new Date(h.first_seen).toLocaleString(), true);
+    if (h.last_seen) addKV(prov, "Last Seen", new Date(h.last_seen).toLocaleString(), true);
   }
 
-  function toggleRow(tr, h) {
-    const isOpen = state.open.has(h.host);
-    if (isOpen) {
-      state.open.delete(h.host);
-      tr.setAttribute("aria-expanded", "false");
-      if (tr.nextElementSibling && tr.nextElementSibling.classList.contains("detail")) {
-        tr.nextElementSibling.remove();
-      }
-    } else {
-      state.open.add(h.host);
-      tr.setAttribute("aria-expanded", "true");
-      tr.after(detail(h));
+  function selectHost(hostStr, openPanel) {
+    state.selected = hostStr;
+    if (openPanel) {
+      state.inspectorOpen = true;
+      $("workbench").classList.remove("inspector-closed");
+      $("inspector").hidden = false;
+      $("toggle-inspector").hidden = true;
     }
+    document.querySelectorAll("tr.row").forEach(tr => {
+      tr.setAttribute("aria-selected", String(tr.dataset.host === state.selected));
+    });
+    const found = currentList.find(x => x.host === state.selected) || hosts.find(x => x.host === state.selected);
+    renderInspector(found || null);
   }
 
   function render() {
-    syncFilterControls();
+    updateSurfaceAndFacets();
+    syncControls();
     currentList = hosts.filter(matches).sort(cmp);
+
+    if (!state.selected || !currentList.some(h => h.host === state.selected)) {
+      state.selected = currentList.length ? currentList[0].host : null;
+    }
+
     const body = $("rows");
     body.replaceChildren();
     const frag = document.createDocumentFragment();
 
     currentList.forEach(h => {
-      const isOpen = state.open.has(h.host);
+      const isSel = h.host === state.selected;
+      const k = kind(h);
       const tr = el("tr", "row" + (h.alive ? "" : " dead"));
       tr.tabIndex = 0;
-      tr.setAttribute("aria-expanded", String(isOpen));
+      tr.dataset.host = h.host;
+      tr.setAttribute("aria-selected", String(isSel));
 
+      // Subdomain cell
       const hostTd = el("td");
-      const hostWrap = el("div", "host-cell");
-      const chev = el("span", "chev", "▸");
-      chev.setAttribute("aria-hidden", "true");
-      const hostText = el("span", "host");
+      const wrap = el("div", "host-wrap");
+      const dot = el("span", "state-dot " + k);
+      dot.title = k === "exposed" ? "Reachable, no WAF" : k === "waf" ? "Behind WAF" : "No response";
+      const nameSpan = el("span", "host-name");
       const prefix = h.host === h.root ? h.host : h.host.slice(0, -(h.root.length + 1));
-      hostText.append(el("span", null, prefix));
-      if (h.host !== h.root) hostText.append(el("span", "rest", "." + h.root));
-      if (h.new) hostText.append(el("span", "badge", "new"));
-      hostWrap.append(chev, hostText);
+      nameSpan.append(el("span", null, prefix));
+      if (h.host !== h.root) nameSpan.append(el("span", "host-rest", "." + h.root));
+      wrap.append(dot, nameSpan);
+      if (h.new) wrap.append(el("span", "badge-new", "new"));
 
       if (h.alive && /^https?:\/\//i.test(h.url)) {
         const ext = el("a", "ext-link");
@@ -459,10 +1431,33 @@ const DATA = {{ .DataJSON }};
         ext.title = "Open " + h.url + " in new tab";
         ext.setAttribute("aria-label", "Open " + h.host + " in new tab");
         ext.append(makeExtIcon());
-        hostWrap.append(ext);
+        wrap.append(ext);
       }
-      hostTd.append(hostWrap);
+      hostTd.append(wrap);
 
+      // Status cell
+      const statusTd = el("td");
+      if (h.alive && h.status) {
+        const sClass = "s" + String(h.status)[0];
+        statusTd.append(el("span", "status-pill num " + sClass, String(h.status)));
+      } else {
+        statusTd.append(el("span", "faint num", "–"));
+      }
+
+      // Title + Server stack cell
+      const titleTd = el("td");
+      const tStack = el("div", "title-stack");
+      const tMain = el("div", "title-main", h.title || (h.alive ? "No page title" : "Unresponsive"));
+      if (h.title) tMain.title = h.title;
+      tStack.append(tMain);
+      if (h.server || h.cdn) {
+        const subParts = [h.server, h.cdn].filter(Boolean).join(" · ");
+        tStack.append(el("div", "title-sub num", subParts));
+      }
+      titleTd.append(tStack);
+
+      // Tech pills cell
+      const techTd = el("td");
       const pills = el("div", "pills");
       const maxPills = 3;
       h.tech.slice(0, maxPills).forEach(t => {
@@ -479,57 +1474,58 @@ const DATA = {{ .DataJSON }};
       if (h.tech.length > maxPills) {
         pills.append(el("span", "pill more num", "+" + (h.tech.length - maxPills)));
       }
-      const techTd = el("td");
       techTd.append(pills);
 
-      const titleTd = el("td", "title", h.title || "");
-      if (h.title) titleTd.title = h.title;
-
+      // WAF cell
       const wafTd = el("td");
       if (h.waf) {
-        wafTd.textContent = h.waf;
+        wafTd.append(el("span", "waf-badge", h.waf));
       } else {
         wafTd.append(el("span", "faint", "–"));
       }
 
-      const ipsTd = el("td", "ips num", h.ips || "");
-      if (h.ips) ipsTd.title = h.ips;
+      // IP cell
+      const ipTd = el("td");
+      const ipStack = el("div", "ip-stack");
+      const ipMain = el("div", "ip-main num", h.ips || "–");
+      if (h.ips) ipMain.title = h.ips;
+      ipStack.append(ipMain);
+      ipTd.append(ipStack);
 
-      tr.append(
-        hostTd,
-        el("td", "num", h.alive ? h.status : "–"),
-        titleTd,
-        techTd,
-        wafTd,
-        ipsTd,
-        el("td", "num", h.depth)
-      );
+      // Depth cell
+      const depthTd = el("td", "num", "d" + (h.depth || 0));
+
+      tr.append(hostTd, statusTd, titleTd, techTd, wafTd, ipTd, depthTd);
 
       tr.addEventListener("click", (e) => {
         if (e.target.closest("a, button")) return;
         const sel = window.getSelection ? String(window.getSelection()).trim() : "";
         if (sel.length > 0) return;
-        toggleRow(tr, h);
+        selectHost(h.host, true);
       });
       tr.addEventListener("keydown", (e) => {
         if (e.target !== tr) return;
         if (e.key === "Enter" || e.key === " ") {
           e.preventDefault();
-          toggleRow(tr, h);
+          selectHost(h.host, true);
         }
       });
 
       frag.append(tr);
-      if (isOpen) frag.append(detail(h));
     });
 
     body.append(frag);
     $("empty").hidden = currentList.length > 0;
-    $("count").textContent = `${fmt.format(currentList.length)} of ${fmt.format(hosts.length)}`;
+    $("count").textContent = `${fmt.format(currentList.length)} of ${fmt.format(hosts.length)} hosts`;
     $("copy-hosts").disabled = currentList.length === 0;
+    $("copy-urls").disabled = !currentList.some(h => h.alive && /^https?:\/\//i.test(h.url));
+
     document.querySelectorAll("th[data-sort]").forEach(th => {
       th.setAttribute("aria-sort", th.dataset.sort === state.sort ? (state.dir > 0 ? "ascending" : "descending") : "none");
     });
+
+    const activeHost = currentList.find(x => x.host === state.selected) || null;
+    renderInspector(activeHost);
   }
 
   function resetAllFilters() {
@@ -537,10 +1533,11 @@ const DATA = {{ .DataJSON }};
     state.key = "";
     state.status.clear();
     state.tech = "";
-    if ( state.root ) {
+    state.wafVendor = "";
+    state.depthFilter = null;
+    if (state.root) {
       state.root = "";
       updateSubtitle();
-      updateSurfaceAndTech();
     }
     $("q").value = "";
     render();
@@ -551,11 +1548,19 @@ const DATA = {{ .DataJSON }};
   $("root").addEventListener("change", e => {
     state.root = e.target.value;
     updateSubtitle();
-    updateSurfaceAndTech();
     render();
   });
   $("reset").addEventListener("click", resetAllFilters);
   $("empty-reset").addEventListener("click", resetAllFilters);
+
+  $("close-inspector").addEventListener("click", () => {
+    state.inspectorOpen = false;
+    syncControls();
+  });
+  $("toggle-inspector").addEventListener("click", () => {
+    state.inspectorOpen = true;
+    syncControls();
+  });
 
   $("copy-hosts").addEventListener("click", async () => {
     if (!currentList.length) return;
@@ -564,16 +1569,27 @@ const DATA = {{ .DataJSON }};
     try {
       await navigator.clipboard.writeText(text);
       btn.textContent = `Copied ${fmt.format(currentList.length)}`;
-      setTimeout(() => { btn.textContent = "Copy hosts"; }, 1600);
-    } catch (_) {
-      btn.textContent = "Copy failed";
-      setTimeout(() => { btn.textContent = "Copy hosts"; }, 1600);
-    }
+      setTimeout(() => { btn.textContent = "Copy hosts"; }, 1500);
+    } catch (_) {}
   });
 
-  document.querySelectorAll(".key").forEach(b => b.addEventListener("click", () => {
+  $("copy-urls").addEventListener("click", async () => {
+    const urls = currentList.filter(h => h.alive && /^https?:\/\//i.test(h.url)).map(h => h.url);
+    if (!urls.length) return;
+    const btn = $("copy-urls");
+    try {
+      await navigator.clipboard.writeText(urls.join("\n"));
+      btn.textContent = `Copied ${fmt.format(urls.length)} URLs`;
+      setTimeout(() => { btn.textContent = "Copy URLs"; }, 1500);
+    } catch (_) {}
+  });
+
+  document.querySelectorAll(".kpi-card").forEach(b => b.addEventListener("click", () => {
     state.key = state.key === b.dataset.key ? "" : b.dataset.key;
-    if (state.key === "dead") state.status.clear();
+    if (state.key === "dead") {
+      state.status.clear();
+      state.wafVendor = "";
+    }
     render();
   }));
 
@@ -592,13 +1608,12 @@ const DATA = {{ .DataJSON }};
   }));
 
   document.addEventListener("keydown", (e) => {
-    if (e.key === "/" && !e.metaKey && !e.ctrlKey && !e.altKey) {
-      const tag = document.activeElement ? document.activeElement.tagName : "";
-      if (tag !== "INPUT" && tag !== "TEXTAREA" && tag !== "SELECT") {
-        e.preventDefault();
-        $("q").focus();
-        $("q").select();
-      }
+    const tag = document.activeElement ? document.activeElement.tagName : "";
+    const inInput = tag === "INPUT" || tag === "TEXTAREA" || tag === "SELECT";
+    if (e.key === "/" && !inInput && !e.metaKey && !e.ctrlKey && !e.altKey) {
+      e.preventDefault();
+      $("q").focus();
+      $("q").select();
     } else if (e.key === "Escape" && document.activeElement === $("q")) {
       if ($("q").value) {
         $("q").value = "";
@@ -607,9 +1622,19 @@ const DATA = {{ .DataJSON }};
       } else {
         $("q").blur();
       }
+    } else if ((e.key === "j" || e.key === "k") && !inInput && !e.metaKey && !e.ctrlKey && !e.altKey && currentList.length) {
+      e.preventDefault();
+      const idx = currentList.findIndex(x => x.host === state.selected);
+      const nextIdx = e.key === "j"
+        ? Math.min(currentList.length - 1, idx + 1)
+        : Math.max(0, (idx === -1 ? 0 : idx - 1));
+      selectHost(currentList[nextIdx].host, true);
+      const rowEl = document.querySelector(`tr.row[data-host="${CSS.escape(currentList[nextIdx].host)}"]`);
+      if (rowEl) rowEl.scrollIntoView({ block: "nearest" });
     }
   });
 
+  updateSubtitle();
   render();
 })();
 </script>

@@ -4,7 +4,7 @@ import (
 	"github.com/projectdiscovery/gologger"
 )
 
-const version = "v1.1.1"
+const version = "v1.1.2"
 
 const banner = `
                   ____ _       

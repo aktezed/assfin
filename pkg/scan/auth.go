@@ -16,23 +16,37 @@ import (
 
 var (
 	registerPaths = []string{
+		// Common modern & standard
 		"/register",
 		"/signup",
 		"/sign-up",
 		"/join",
+		"/create-account",
+		// Classic / PHP / ASP / HTML
 		"/register.php",
 		"/signup.php",
-		"/create-account",
+		"/register.html",
+		"/signup.html",
+		"/register.aspx",
+		"/signup.aspx",
+		// Sub-path /auth/ and /account/
 		"/auth/register",
 		"/auth/signup",
 		"/auth/sign-up",
-		"/auth/join",
+		"/auth/register.php",
+		"/auth/signup.php",
+		"/account/register",
+		"/account/signup",
 		"/user/register",
 		"/users/sign_up",
 		"/accounts/signup",
+		// Multilingual (Indonesian / Southeast Asian)
 		"/daftar",
 		"/pendaftaran",
 		"/registrasi",
+		"/daftar.php",
+		"/pendaftaran.php",
+		"/registrasi.php",
 	}
 
 	loginPaths = []string{
@@ -41,12 +55,18 @@ var (
 		"/sign-in",
 		"/login.php",
 		"/signin.php",
+		"/login.html",
+		"/signin.html",
+		"/login.aspx",
 		"/auth/login",
 		"/auth/signin",
 		"/auth/sign-in",
+		"/account/login",
 		"/user/login",
 		"/admin",
+		"/admin/login",
 		"/masuk",
+		"/masuk.php",
 	}
 
 	registerRegex = regexp.MustCompile(`(?i)(register|sign[\s_-]*up|create[\s_-]*account|join[\s_-]*now|registration|daftar|pendaftaran|registrasi)`)
@@ -120,6 +140,7 @@ func (c *AuthClassifier) Classify(ctx context.Context, rawURL string) (authType 
 	hasPassword := passwordRegex.MatchString(baseBody)
 	hasForm := formRegex.MatchString(baseBody)
 
+	// If root directly has a registration link
 	if hasRegLink {
 		return "register", regLink
 	}
@@ -129,16 +150,36 @@ func (c *AuthClassifier) Classify(ctx context.Context, rawURL string) (authType 
 		return "register", rawURL
 	}
 
-	// Base page is a login-only page
-	if hasPassword && (loginRegex.MatchString(baseBody) || hasForm) {
-		return "login_only", rawURL
+	// Step 2: If root links to a login page, inspect the login page itself!
+	// Real-world flow: Most sites put "Don't have an account? Register / Daftar" INSIDE the login page.
+	if hasLoginLink {
+		_, loginBody, lErr := c.fetch(ctx, loginLink)
+		if lErr == nil {
+			if hasReg, regFromLogin := extractLink(loginBody, baseURL, registerRegex); hasReg {
+				return "register", regFromLogin
+			}
+			if passwordRegex.MatchString(loginBody) && registerRegex.MatchString(loginBody) {
+				return "register", loginLink
+			}
+		}
 	}
 
-	// Step 2: Wildcard / Soft-404 baseline check
+	// Base page is a login page with password field
+	if hasPassword && (loginRegex.MatchString(baseBody) || hasForm) {
+		if hasReg, regFromLogin := extractLink(baseBody, baseURL, registerRegex); hasReg {
+			return "register", regFromLogin
+		}
+		if loginLink == "" {
+			loginLink = rawURL
+		}
+	}
+
+	// Step 3: Wildcard / Soft-404 baseline check
 	// Send a request to an absurd path to detect catch-all 200 SPAs
 	isWildcard, wildcardLen := c.checkWildcard(ctx, baseURL)
 
-	// Step 3: Check candidate registration endpoints
+	// Step 4: Check candidate registration endpoints directly
+	// (e.g. /register, /register.php, /signup.php, /daftar, /pendaftaran.php, etc.)
 	for _, path := range registerPaths {
 		candidateURL := baseURL + path
 		resp, body, err := c.fetch(ctx, candidateURL)
@@ -152,7 +193,7 @@ func (c *AuthClassifier) Classify(ctx context.Context, rawURL string) (authType 
 		}
 
 		if resp.StatusCode == 200 || (resp.StatusCode >= 300 && resp.StatusCode < 400) {
-			if passwordRegex.MatchString(body) || registerRegex.MatchString(body) || strings.Contains(resp.Request.URL.Path, "register") || strings.Contains(resp.Request.URL.Path, "signup") {
+			if passwordRegex.MatchString(body) || registerRegex.MatchString(body) || strings.Contains(resp.Request.URL.Path, "register") || strings.Contains(resp.Request.URL.Path, "signup") || strings.Contains(resp.Request.URL.Path, "daftar") {
 				targetURL := candidateURL
 				if resp.Request != nil && resp.Request.URL != nil {
 					targetURL = resp.Request.URL.String()
@@ -162,12 +203,8 @@ func (c *AuthClassifier) Classify(ctx context.Context, rawURL string) (authType 
 		}
 	}
 
-	// If root linked to a login page
-	if hasLoginLink {
-		return "login_only", loginLink
-	}
-
-	// Step 4: Check candidate login endpoints
+	// Step 5: Check candidate login endpoints directly
+	// (And inspect if the login page itself contains a registration link!)
 	for _, path := range loginPaths {
 		candidateURL := baseURL + path
 		resp, body, err := c.fetch(ctx, candidateURL)
@@ -179,13 +216,24 @@ func (c *AuthClassifier) Classify(ctx context.Context, rawURL string) (authType 
 			continue
 		}
 
-		if passwordRegex.MatchString(body) || loginRegex.MatchString(body) || strings.Contains(resp.Request.URL.Path, "login") {
+		if passwordRegex.MatchString(body) || loginRegex.MatchString(body) || strings.Contains(resp.Request.URL.Path, "login") || strings.Contains(resp.Request.URL.Path, "masuk") {
 			targetURL := candidateURL
 			if resp.Request != nil && resp.Request.URL != nil {
 				targetURL = resp.Request.URL.String()
 			}
-			return "login_only", targetURL
+			// Does this login page have a link or form to register/signup?
+			if hasReg, regFromLogin := extractLink(body, baseURL, registerRegex); hasReg {
+				return "register", regFromLogin
+			}
+			if loginLink == "" {
+				loginLink = targetURL
+			}
 		}
+	}
+
+	// If any login portal was detected but no registration link exists anywhere
+	if loginLink != "" {
+		return "login_only", loginLink
 	}
 
 	// If base response was valid 200/30x with HTML/content, it's a public landing page

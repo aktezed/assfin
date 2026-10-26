@@ -163,3 +163,60 @@ func TestAuthClassifier_NextJSDaftarLink(t *testing.T) {
 		t.Errorf("expected %q, got %q", expectedURL, authURL)
 	}
 }
+
+func TestAuthClassifier_RegisterInsideLoginPage(t *testing.T) {
+	// Root has ONLY a login link (/login.php).
+	// But INSIDE /login.php, there is a link to /register.php!
+	client := &http.Client{
+		Transport: roundTripFunc(func(req *http.Request) (*http.Response, error) {
+			switch req.URL.Path {
+			case "":
+				return mockResponse(http.StatusOK, `<html><body><h1>Welcome</h1><a href="/login.php">Log In</a></body></html>`, req), nil
+			case "/login.php":
+				return mockResponse(http.StatusOK, `<html><body><form><input type="password"></form><p>No account? <a href="/register.php">Sign Up</a></p></body></html>`, req), nil
+			case "/register.php":
+				return mockResponse(http.StatusOK, `<html><body><h1>Registration Form</h1><form><input type="password"></form></body></html>`, req), nil
+			default:
+				return mockResponse(http.StatusNotFound, "not found", req), nil
+			}
+		}),
+	}
+
+	classifier := NewAuthClassifierWithClient(client)
+	authType, authURL := classifier.Classify(context.Background(), "https://classic.example.com")
+
+	if authType != "register" {
+		t.Errorf("expected 'register', got %q", authType)
+	}
+	expectedURL := "https://classic.example.com/register.php"
+	if authURL != expectedURL {
+		t.Errorf("expected %q, got %q", expectedURL, authURL)
+	}
+}
+
+func TestAuthClassifier_DirectRegisterPhp(t *testing.T) {
+	// Root has no link at all. But /register.php is directly reachable.
+	client := &http.Client{
+		Transport: roundTripFunc(func(req *http.Request) (*http.Response, error) {
+			switch req.URL.Path {
+			case "":
+				return mockResponse(http.StatusOK, `<html><body><h1>Landing Page Only</h1></body></html>`, req), nil
+			case "/register.php":
+				return mockResponse(http.StatusOK, `<html><body><h1>Daftar Akun Baru</h1><form><input type="password"><button>Daftar</button></form></body></html>`, req), nil
+			default:
+				return mockResponse(http.StatusNotFound, "not found", req), nil
+			}
+		}),
+	}
+
+	classifier := NewAuthClassifierWithClient(client)
+	authType, authURL := classifier.Classify(context.Background(), "https://phpapp.example.com")
+
+	if authType != "register" {
+		t.Errorf("expected 'register', got %q", authType)
+	}
+	expectedURL := "https://phpapp.example.com/register.php"
+	if authURL != expectedURL {
+		t.Errorf("expected %q, got %q", expectedURL, authURL)
+	}
+}

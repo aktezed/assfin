@@ -23,6 +23,16 @@ var (
 		"/register.php",
 		"/signup.php",
 		"/create-account",
+		"/auth/register",
+		"/auth/signup",
+		"/auth/sign-up",
+		"/auth/join",
+		"/user/register",
+		"/users/sign_up",
+		"/accounts/signup",
+		"/daftar",
+		"/pendaftaran",
+		"/registrasi",
 	}
 
 	loginPaths = []string{
@@ -32,15 +42,21 @@ var (
 		"/login.php",
 		"/signin.php",
 		"/auth/login",
+		"/auth/signin",
+		"/auth/sign-in",
+		"/user/login",
 		"/admin",
+		"/masuk",
 	}
 
-	registerRegex = regexp.MustCompile(`(?i)\b(register|sign\s*up|create\s+account|join\s+now|registration)\b`)
-	loginRegex    = regexp.MustCompile(`(?i)\b(login|sign\s*in|log\s*in|authenticate|portal)\b`)
+	registerRegex = regexp.MustCompile(`(?i)(register|sign[\s_-]*up|create[\s_-]*account|join[\s_-]*now|registration|daftar|pendaftaran|registrasi)`)
+	loginRegex    = regexp.MustCompile(`(?i)(login|sign[\s_-]*in|log[\s_-]*in|authenticate|portal|masuk)`)
 	passwordRegex = regexp.MustCompile(`(?i)<input[^>]+type=["']?password["']?`)
 	formRegex     = regexp.MustCompile(`(?i)<form[^>]*>`)
+	anchorRegex   = regexp.MustCompile(`(?i)<a[^>]+href=["']([^"']+)["'][^>]*>(.*?)</a>`)
 	linkRegex     = regexp.MustCompile(`(?i)<a[^>]+href=["']([^"']+)["'][^>]*>`)
 	actionRegex   = regexp.MustCompile(`(?i)action=["']([^"']+)["']`)
+	jsonLinkRegex = regexp.MustCompile(`(?i)["'](/[a-zA-Z0-9_\-\/]*(?:register|sign[\s_-]*up|daftar|registrasi|login|sign[\s_-]*in|masuk)[a-zA-Z0-9_\-\/]*)["']`)
 )
 
 // AuthClassifier handles asset classification into register, login_only, or landing.
@@ -194,7 +210,7 @@ func (c *AuthClassifier) fetch(ctx context.Context, target string) (*http.Respon
 	}
 	defer resp.Body.Close()
 
-	bodyBytes, _ := io.ReadAll(io.LimitReader(resp.Body, 128*1024))
+	bodyBytes, _ := io.ReadAll(io.LimitReader(resp.Body, 512*1024))
 	return resp, string(bodyBytes), nil
 }
 
@@ -211,27 +227,65 @@ func (c *AuthClassifier) checkWildcard(ctx context.Context, baseURL string) (boo
 }
 
 func extractLink(html, baseURL string, targetPattern *regexp.Regexp) (bool, string) {
-	matches := linkRegex.FindAllStringSubmatch(html, -1)
-	for _, m := range matches {
-		if len(m) > 1 {
+	// 1. Check anchor tags with inner text (e.g. <a href="...">Daftar</button></a>)
+	anchorMatches := anchorRegex.FindAllStringSubmatch(html, -1)
+	for _, m := range anchorMatches {
+		if len(m) > 2 {
 			href := strings.TrimSpace(m[1])
-			if targetPattern.MatchString(href) {
+			innerText := m[2]
+			if (targetPattern.MatchString(href) || targetPattern.MatchString(innerText)) && isValidAuthLink(href) {
 				return true, resolveURL(baseURL, href)
 			}
 		}
 	}
 
+	// 2. Check standalone <a href="..."> tags
+	matches := linkRegex.FindAllStringSubmatch(html, -1)
+	for _, m := range matches {
+		if len(m) > 1 {
+			href := strings.TrimSpace(m[1])
+			if targetPattern.MatchString(href) && isValidAuthLink(href) {
+				return true, resolveURL(baseURL, href)
+			}
+		}
+	}
+
+	// 3. Check form actions
 	formMatches := actionRegex.FindAllStringSubmatch(html, -1)
 	for _, m := range formMatches {
 		if len(m) > 1 {
 			action := strings.TrimSpace(m[1])
-			if targetPattern.MatchString(action) {
+			if targetPattern.MatchString(action) && isValidAuthLink(action) {
 				return true, resolveURL(baseURL, action)
 			}
 		}
 	}
 
+	// 4. Check JSON / script router paths (e.g. Next.js router strings, client bundle configs)
+	jsonMatches := jsonLinkRegex.FindAllStringSubmatch(html, -1)
+	for _, m := range jsonMatches {
+		if len(m) > 1 {
+			path := strings.TrimSpace(m[1])
+			if targetPattern.MatchString(path) && isValidAuthLink(path) {
+				return true, resolveURL(baseURL, path)
+			}
+		}
+	}
+
 	return false, ""
+}
+
+func isValidAuthLink(href string) bool {
+	if href == "" || href == "#" || strings.HasPrefix(href, "javascript:") || strings.HasPrefix(href, "mailto:") {
+		return false
+	}
+	lower := strings.ToLower(href)
+	for _, ext := range []string{".js", ".css", ".png", ".jpg", ".jpeg", ".svg", ".ico", ".woff", ".woff2"} {
+		if strings.HasSuffix(lower, ext) {
+			return false
+		}
+	}
+	return true
 }
 
 func resolveURL(baseURL, href string) string {

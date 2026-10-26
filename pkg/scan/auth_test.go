@@ -140,3 +140,26 @@ func TestAuthClassifier_DirectRegisterEndpoint(t *testing.T) {
 		t.Errorf("expected %q, got %q", expectedURL, authURL)
 	}
 }
+
+func TestAuthClassifier_NextJSDaftarLink(t *testing.T) {
+	// Simulating Next.js React Server Component layout with Indonesian Daftar button and /auth/sign-up
+	client := &http.Client{
+		Transport: roundTripFunc(func(req *http.Request) (*http.Response, error) {
+			if req.URL.Path == "" {
+				return mockResponse(http.StatusOK, `<!DOCTYPE html><html lang="id"><head><title>Portal</title></head><body><header><a href="/auth/login"><button>Masuk</button></a><a class="hidden md:block" href="/auth/sign-up"><button>Daftar</button></a></header></body></html>`, req), nil
+			}
+			return mockResponse(http.StatusNotFound, "not found", req), nil
+		}),
+	}
+
+	classifier := NewAuthClassifierWithClient(client)
+	authType, authURL := classifier.Classify(context.Background(), "https://balaiyanpus.jogjaprov.go.id")
+
+	if authType != "register" {
+		t.Errorf("expected 'register', got %q", authType)
+	}
+	expectedURL := "https://balaiyanpus.jogjaprov.go.id/auth/sign-up"
+	if authURL != expectedURL {
+		t.Errorf("expected %q, got %q", expectedURL, authURL)
+	}
+}

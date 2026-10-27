@@ -18,10 +18,31 @@ var (
 	registerPaths = []string{
 		// Common modern & standard
 		"/register",
+		"/register/",
 		"/signup",
+		"/signup/",
 		"/sign-up",
+		"/sign-up/",
 		"/join",
+		"/join/",
 		"/create-account",
+		"/get-started",
+
+		// Sub-path /auth/, /account/, /users/
+		"/auth/register",
+		"/auth/signup",
+		"/auth/sign-up",
+		"/auth/create-account",
+		"/account/register",
+		"/account/signup",
+		"/account/create",
+		"/user/register",
+		"/users/sign_up",
+		"/accounts/signup",
+		"/accounts/signup/",
+		"/accounts/register",
+		"/accounts/register/",
+
 		// Classic / PHP / ASP / HTML
 		"/register.php",
 		"/signup.php",
@@ -29,47 +50,69 @@ var (
 		"/signup.html",
 		"/register.aspx",
 		"/signup.aspx",
-		// Sub-path /auth/ and /account/
-		"/auth/register",
-		"/auth/signup",
-		"/auth/sign-up",
-		"/auth/register.php",
-		"/auth/signup.php",
-		"/account/register",
-		"/account/signup",
-		"/user/register",
-		"/users/sign_up",
-		"/accounts/signup",
+		"/Register.aspx",
+		"/Signup.aspx",
+		"/Account/Register",
+		"/Identity/Account/Register",
+
+		// CMS & Frameworks & LMS & Forums (WordPress, Joomla, Drupal, phpBB, vBulletin, Moodle)
+		"/wp-login.php?action=register",
+		"/wp-signup.php",
+		"/index.php?option=com_users&view=registration",
+		"/ucp.php?mode=register",
+		"/member.php?action=register",
+		"/login/signup.php",
+
 		// Multilingual (Indonesian / Southeast Asian)
 		"/daftar",
+		"/daftar/",
 		"/pendaftaran",
+		"/pendaftaran/",
 		"/registrasi",
+		"/registrasi/",
+		"/daftar-akun",
+		"/buat-akun",
+		"/daftar-online",
+		"/pendaftaran-online",
 		"/daftar.php",
 		"/pendaftaran.php",
 		"/registrasi.php",
+		"/auth/daftar",
+		"/auth/registrasi",
+		"/user/daftar",
 	}
 
 	loginPaths = []string{
 		"/login",
+		"/login/",
 		"/signin",
+		"/signin/",
 		"/sign-in",
+		"/sign-in/",
 		"/login.php",
 		"/signin.php",
 		"/login.html",
 		"/signin.html",
 		"/login.aspx",
+		"/Login.aspx",
+		"/Account/Login",
+		"/Identity/Account/Login",
 		"/auth/login",
 		"/auth/signin",
 		"/auth/sign-in",
 		"/account/login",
 		"/user/login",
+		"/users/sign_in",
 		"/admin",
 		"/admin/login",
+		"/wp-login.php",
 		"/masuk",
+		"/masuk/",
 		"/masuk.php",
+		"/auth/masuk",
 	}
 
-	registerRegex = regexp.MustCompile(`(?i)(register|sign[\s_-]*up|create[\s_-]*account|join[\s_-]*now|registration|daftar|pendaftaran|registrasi)`)
+	registerRegex = regexp.MustCompile(`(?i)(register|sign[\s_-]*up|create[\s_-]*account|join[\s_-]*now|registration|daftar[\s_-]*(?:akun|baru|online|member|pengguna|user|sekarang)?|buat[\s_-]*akun|bikin[\s_-]*akun|registrasi|pendaftaran)`)
 	loginRegex    = regexp.MustCompile(`(?i)(login|sign[\s_-]*in|log[\s_-]*in|authenticate|portal|masuk)`)
 	passwordRegex = regexp.MustCompile(`(?i)<input[^>]+type=["']?password["']?`)
 	formRegex     = regexp.MustCompile(`(?i)<form[^>]*>`)
@@ -77,6 +120,11 @@ var (
 	linkRegex     = regexp.MustCompile(`(?i)<a[^>]+href=["']([^"']+)["'][^>]*>`)
 	actionRegex   = regexp.MustCompile(`(?i)action=["']([^"']+)["']`)
 	jsonLinkRegex = regexp.MustCompile(`(?i)["'](/[a-zA-Z0-9_\-\/]*(?:register|sign[\s_-]*up|daftar|registrasi|login|sign[\s_-]*in|masuk)[a-zA-Z0-9_\-\/]*)["']`)
+
+	// Negative filter for Indonesian words where 'daftar' means catalog/list, not account registration.
+	nonAuthDaftarRegex = regexp.MustCompile(`(?i)daftar[-_\s]*(artikel|berita|buku|harga|menu|isi|produk|layanan|kegiatan|pengumuman|alumni|pegawai|dosen|mahasiswa|siswa|kontak|pustaka|arsip|wisata|fasilitas|unduhan|download|transaksi|peserta|nilai|tabel|kategori|file|post|item|faq|tanya|outlet|cabang|mitra|inventaris|pemilih|prestasi|guru|sekolah|jadwal|informasi|galeri|video|dokumen|publikasi|lowongan|agenda)`)
+	soft404Regex       = regexp.MustCompile(`(?i)(<title>[^<]*(?:404|not found|page not found|halaman tidak ditemukan|tidak ditemukan)[^<]*</title>|<h1>[^<]*(?:404|not found|page not found|halaman tidak ditemukan)[^<]*</h1>)`)
+	regDisabledRegex   = regexp.MustCompile(`(?i)(registration\s+is\s+(?:closed|disabled|not\s+allowed)|user\s+registration\s+is\s+currently\s+not\s+allowed|pendaftaran\s+(?:ditutup|tidak\s+diizinkan|dinonaktifkan))`)
 )
 
 // AuthClassifier handles asset classification into register, login_only, or landing.
@@ -128,6 +176,9 @@ func (c *AuthClassifier) Classify(ctx context.Context, rawURL string) (authType 
 	}
 	baseURL := parsed.Scheme + "://" + parsed.Host
 
+	// Detect wildcard SPA once
+	isWildcard, wildcardLen := c.checkWildcard(ctx, baseURL)
+
 	// Step 1: Base page inspection
 	baseResp, baseBody, err := c.fetch(ctx, rawURL)
 	if err != nil {
@@ -135,30 +186,35 @@ func (c *AuthClassifier) Classify(ctx context.Context, rawURL string) (authType 
 		return "unknown", rawURL
 	}
 
-	hasRegLink, regLink := extractLink(baseBody, baseURL, registerRegex)
-	hasLoginLink, loginLink := extractLink(baseBody, baseURL, loginRegex)
+	hasRegLink, regLinkCandidate := extractLink(baseBody, baseURL, registerRegex)
+	hasLoginLink, loginLinkCandidate := extractLink(baseBody, baseURL, loginRegex)
 	hasPassword := passwordRegex.MatchString(baseBody)
 	hasForm := formRegex.MatchString(baseBody)
 
-	// If root directly has a registration link
+	// If root directly has a registration link, verify it is alive (not a 404 or dead link)
 	if hasRegLink {
-		return "register", regLink
+		if ok, verifiedReg := c.verifyRegisterEndpoint(ctx, regLinkCandidate, isWildcard, wildcardLen); ok {
+			return "register", verifiedReg
+		}
 	}
 
 	// Base page is an open registration page itself
-	if hasPassword && registerRegex.MatchString(baseBody) {
+	if hasPassword && registerRegex.MatchString(baseBody) && !isNonAuthHref(rawURL) {
 		return "register", rawURL
 	}
 
 	// Step 2: If root links to a login page, inspect the login page itself!
 	// Real-world flow: Most sites put "Don't have an account? Register / Daftar" INSIDE the login page.
+	var loginLink string
 	if hasLoginLink {
-		_, loginBody, lErr := c.fetch(ctx, loginLink)
-		if lErr == nil {
+		if ok, verifiedLogin, loginBody := c.verifyLoginEndpoint(ctx, loginLinkCandidate, isWildcard, wildcardLen); ok {
+			loginLink = verifiedLogin
 			if hasReg, regFromLogin := extractLink(loginBody, baseURL, registerRegex); hasReg {
-				return "register", regFromLogin
+				if regOk, verifiedReg := c.verifyRegisterEndpoint(ctx, regFromLogin, isWildcard, wildcardLen); regOk {
+					return "register", verifiedReg
+				}
 			}
-			if passwordRegex.MatchString(loginBody) && registerRegex.MatchString(loginBody) {
+			if passwordRegex.MatchString(loginBody) && registerRegex.MatchString(loginBody) && !regDisabledRegex.MatchString(loginBody) {
 				return "register", loginLink
 			}
 		}
@@ -167,66 +223,36 @@ func (c *AuthClassifier) Classify(ctx context.Context, rawURL string) (authType 
 	// Base page is a login page with password field
 	if hasPassword && (loginRegex.MatchString(baseBody) || hasForm) {
 		if hasReg, regFromLogin := extractLink(baseBody, baseURL, registerRegex); hasReg {
-			return "register", regFromLogin
+			if regOk, verifiedReg := c.verifyRegisterEndpoint(ctx, regFromLogin, isWildcard, wildcardLen); regOk {
+				return "register", verifiedReg
+			}
 		}
 		if loginLink == "" {
 			loginLink = rawURL
 		}
 	}
 
-	// Step 3: Wildcard / Soft-404 baseline check
-	// Send a request to an absurd path to detect catch-all 200 SPAs
-	isWildcard, wildcardLen := c.checkWildcard(ctx, baseURL)
-
-	// Step 4: Check candidate registration endpoints directly
-	// (e.g. /register, /register.php, /signup.php, /daftar, /pendaftaran.php, etc.)
+	// Step 3: Check candidate registration endpoints directly
+	// (CMS, frameworks, Indonesian, international)
 	for _, path := range registerPaths {
 		candidateURL := baseURL + path
-		resp, body, err := c.fetch(ctx, candidateURL)
-		if err != nil || resp.StatusCode < 200 || resp.StatusCode >= 400 {
-			continue
-		}
-
-		// Avoid wildcard SPA false positives
-		if isWildcard && abs(len(body)-wildcardLen) < 64 && !passwordRegex.MatchString(body) {
-			continue
-		}
-
-		if resp.StatusCode == 200 || (resp.StatusCode >= 300 && resp.StatusCode < 400) {
-			if passwordRegex.MatchString(body) || registerRegex.MatchString(body) || strings.Contains(resp.Request.URL.Path, "register") || strings.Contains(resp.Request.URL.Path, "signup") || strings.Contains(resp.Request.URL.Path, "daftar") {
-				targetURL := candidateURL
-				if resp.Request != nil && resp.Request.URL != nil {
-					targetURL = resp.Request.URL.String()
-				}
-				return "register", targetURL
-			}
+		if ok, verifiedReg := c.verifyRegisterEndpoint(ctx, candidateURL, isWildcard, wildcardLen); ok {
+			return "register", verifiedReg
 		}
 	}
 
-	// Step 5: Check candidate login endpoints directly
-	// (And inspect if the login page itself contains a registration link!)
+	// Step 4: Check candidate login endpoints directly
+	// (And inspect if the login page itself contains a live registration link!)
 	for _, path := range loginPaths {
 		candidateURL := baseURL + path
-		resp, body, err := c.fetch(ctx, candidateURL)
-		if err != nil || resp.StatusCode < 200 || resp.StatusCode >= 400 {
-			continue
-		}
-
-		if isWildcard && abs(len(body)-wildcardLen) < 64 && !passwordRegex.MatchString(body) {
-			continue
-		}
-
-		if passwordRegex.MatchString(body) || loginRegex.MatchString(body) || strings.Contains(resp.Request.URL.Path, "login") || strings.Contains(resp.Request.URL.Path, "masuk") {
-			targetURL := candidateURL
-			if resp.Request != nil && resp.Request.URL != nil {
-				targetURL = resp.Request.URL.String()
-			}
-			// Does this login page have a link or form to register/signup?
-			if hasReg, regFromLogin := extractLink(body, baseURL, registerRegex); hasReg {
-				return "register", regFromLogin
+		if ok, verifiedLogin, loginBody := c.verifyLoginEndpoint(ctx, candidateURL, isWildcard, wildcardLen); ok {
+			if hasReg, regFromLogin := extractLink(loginBody, baseURL, registerRegex); hasReg {
+				if regOk, verifiedReg := c.verifyRegisterEndpoint(ctx, regFromLogin, isWildcard, wildcardLen); regOk {
+					return "register", verifiedReg
+				}
 			}
 			if loginLink == "" {
-				loginLink = targetURL
+				loginLink = verifiedLogin
 			}
 		}
 	}
@@ -242,6 +268,126 @@ func (c *AuthClassifier) Classify(ctx context.Context, rawURL string) (authType 
 	}
 
 	return "unknown", rawURL
+}
+
+func (c *AuthClassifier) verifyRegisterEndpoint(ctx context.Context, targetURL string, isWildcard bool, wildcardLen int) (bool, string) {
+	if isNonAuthHref(targetURL) {
+		return false, ""
+	}
+
+	resp, body, err := c.fetch(ctx, targetURL)
+	if err != nil || resp == nil {
+		return false, ""
+	}
+
+	// Must be HTTP 200 OK or 30x redirect
+	if resp.StatusCode < 200 || resp.StatusCode >= 400 {
+		return false, ""
+	}
+
+	// Reject soft-404 pages
+	if soft404Regex.MatchString(body) {
+		return false, ""
+	}
+
+	// Reject if registration is explicitly closed/disabled (e.g. WordPress, Joomla, forums)
+	if regDisabledRegex.MatchString(body) {
+		return false, ""
+	}
+
+	// Reject wildcard SPA match unless there's a password field
+	if isWildcard && abs(len(body)-wildcardLen) < 64 && !passwordRegex.MatchString(body) {
+		return false, ""
+	}
+
+	finalURL := targetURL
+	if resp.Request != nil && resp.Request.URL != nil {
+		finalURL = resp.Request.URL.String()
+	}
+
+	if isNonAuthHref(finalURL) || soft404Regex.MatchString(finalURL) {
+		return false, ""
+	}
+
+	lowerPath := ""
+	if resp.Request != nil && resp.Request.URL != nil {
+		lowerPath = strings.ToLower(resp.Request.URL.Path)
+	}
+
+	hasPassword := passwordRegex.MatchString(body)
+	hasForm := formRegex.MatchString(body)
+	hasRegContent := registerRegex.MatchString(body)
+
+	pathHasReg := strings.Contains(lowerPath, "register") ||
+		strings.Contains(lowerPath, "signup") ||
+		strings.Contains(lowerPath, "sign-up") ||
+		strings.Contains(lowerPath, "registrasi") ||
+		(strings.Contains(lowerPath, "daftar") && !isNonAuthHref(lowerPath))
+
+	targetLower := strings.ToLower(targetURL)
+	targetHasReg := strings.Contains(targetLower, "register") ||
+		strings.Contains(targetLower, "signup") ||
+		strings.Contains(targetLower, "sign-up") ||
+		strings.Contains(targetLower, "registrasi") ||
+		(strings.Contains(targetLower, "daftar") && !isNonAuthHref(targetLower))
+
+	if hasPassword || (hasForm && hasRegContent) || pathHasReg || targetHasReg {
+		return true, finalURL
+	}
+
+	return false, ""
+}
+
+func (c *AuthClassifier) verifyLoginEndpoint(ctx context.Context, targetURL string, isWildcard bool, wildcardLen int) (bool, string, string) {
+	if isNonAuthHref(targetURL) {
+		return false, "", ""
+	}
+
+	resp, body, err := c.fetch(ctx, targetURL)
+	if err != nil || resp == nil {
+		return false, "", ""
+	}
+
+	if resp.StatusCode < 200 || resp.StatusCode >= 400 {
+		return false, "", ""
+	}
+
+	if soft404Regex.MatchString(body) {
+		return false, "", ""
+	}
+
+	if isWildcard && abs(len(body)-wildcardLen) < 64 && !passwordRegex.MatchString(body) {
+		return false, "", ""
+	}
+
+	finalURL := targetURL
+	if resp.Request != nil && resp.Request.URL != nil {
+		finalURL = resp.Request.URL.String()
+	}
+
+	hasPassword := passwordRegex.MatchString(body)
+	hasLoginContent := loginRegex.MatchString(body)
+
+	lowerPath := ""
+	if resp.Request != nil && resp.Request.URL != nil {
+		lowerPath = strings.ToLower(resp.Request.URL.Path)
+	}
+	pathHasLogin := strings.Contains(lowerPath, "login") ||
+		strings.Contains(lowerPath, "signin") ||
+		strings.Contains(lowerPath, "sign-in") ||
+		strings.Contains(lowerPath, "masuk")
+
+	targetLower := strings.ToLower(targetURL)
+	targetHasLogin := strings.Contains(targetLower, "login") ||
+		strings.Contains(targetLower, "signin") ||
+		strings.Contains(targetLower, "sign-in") ||
+		strings.Contains(targetLower, "masuk")
+
+	if hasPassword || (formRegex.MatchString(body) && hasLoginContent) || pathHasLogin || targetHasLogin {
+		return true, finalURL, body
+	}
+
+	return false, "", ""
 }
 
 func (c *AuthClassifier) fetch(ctx context.Context, target string) (*http.Response, string, error) {
@@ -280,7 +426,10 @@ func extractLink(html, baseURL string, targetPattern *regexp.Regexp) (bool, stri
 	for _, m := range anchorMatches {
 		if len(m) > 2 {
 			href := strings.TrimSpace(m[1])
-			innerText := m[2]
+			innerText := strings.TrimSpace(m[2])
+			if isNonAuthHref(href) || nonAuthDaftarRegex.MatchString(innerText) {
+				continue
+			}
 			if (targetPattern.MatchString(href) || targetPattern.MatchString(innerText)) && isValidAuthLink(href) {
 				return true, resolveURL(baseURL, href)
 			}
@@ -292,6 +441,9 @@ func extractLink(html, baseURL string, targetPattern *regexp.Regexp) (bool, stri
 	for _, m := range matches {
 		if len(m) > 1 {
 			href := strings.TrimSpace(m[1])
+			if isNonAuthHref(href) {
+				continue
+			}
 			if targetPattern.MatchString(href) && isValidAuthLink(href) {
 				return true, resolveURL(baseURL, href)
 			}
@@ -303,6 +455,9 @@ func extractLink(html, baseURL string, targetPattern *regexp.Regexp) (bool, stri
 	for _, m := range formMatches {
 		if len(m) > 1 {
 			action := strings.TrimSpace(m[1])
+			if isNonAuthHref(action) {
+				continue
+			}
 			if targetPattern.MatchString(action) && isValidAuthLink(action) {
 				return true, resolveURL(baseURL, action)
 			}
@@ -314,6 +469,9 @@ func extractLink(html, baseURL string, targetPattern *regexp.Regexp) (bool, stri
 	for _, m := range jsonMatches {
 		if len(m) > 1 {
 			path := strings.TrimSpace(m[1])
+			if isNonAuthHref(path) {
+				continue
+			}
 			if targetPattern.MatchString(path) && isValidAuthLink(path) {
 				return true, resolveURL(baseURL, path)
 			}
@@ -321,6 +479,24 @@ func extractLink(html, baseURL string, targetPattern *regexp.Regexp) (bool, stri
 	}
 
 	return false, ""
+}
+
+func isNonAuthHref(href string) bool {
+	if href == "" {
+		return false
+	}
+	lower := strings.ToLower(href)
+	if nonAuthDaftarRegex.MatchString(lower) {
+		return true
+	}
+	// If path or query segment has daftar-xxx, check if it's not a known auth suffix
+	if strings.Contains(lower, "daftar-") || strings.Contains(lower, "daftar_") {
+		validAuthSuffix := regexp.MustCompile(`(?i)daftar[-_](akun|baru|online|member|pengguna|user|sekarang|registrasi)`)
+		if !validAuthSuffix.MatchString(lower) {
+			return true
+		}
+	}
+	return false
 }
 
 func isValidAuthLink(href string) bool {

@@ -103,13 +103,16 @@ SUBFINDER:
    -pc, -provider-config string  subfinder provider-config.yaml
 
 PROBING & CLASSIFICATION:
-   -rate int          httpx max requests per second (default 30)
-   -threads int       httpx threads (default 25)
-   -timeout int       httpx request timeout in seconds (default 7)
-   -follow            follow redirects when probing
-   -no-probe          enumerate only, skip httpx
-   -no-auth           skip asset role (register/login/landing) classification
-   -auth-threads int  asset classification concurrency threads (default 10)
+   -rate int            httpx max requests per second (default 30)
+   -threads int         httpx threads (default 25)
+   -timeout int         httpx request timeout in seconds (default 7)
+   -follow              follow redirects when probing
+   -no-probe            enumerate only, skip httpx
+   -no-auth             skip asset role (register/login/landing) classification
+   -auth-threads int    asset classification concurrency threads (default 10)
+   -no-content          disable content-derived host discovery from HTTP responses
+   -content-depth int   max content-discovery feedback rounds (default 1)
+   -content-assets int  max same-host .js/.json assets inspected per host (0 = off)
 
 QUERY / FILTER:
    -q, -query                 run in query mode against existing database
@@ -185,6 +188,9 @@ assfin scan -d example.com -exclude staging.example.com,internal.example.com
 | `-timeout` | `7s` | HTTP request timeout |
 | `-follow` | `false` | Follow HTTP redirects |
 | `-no-probe` | `false` | Passive enumeration only; skips HTTP probing |
+| `-no-content` | `false` | Disable content-derived host discovery from probed HTTP responses |
+| `-content-depth` | `1` | Maximum content-discovery feedback rounds into passive crawl and probing |
+| `-content-assets` | `0` (off) | Maximum same-host `.js`/`.json` assets inspected per probed HTML page |
 
 > [!NOTE]
 > Enumeration uses passive sources only (e.g. crt.sh, VirusTotal, AlienVault) and never queries the target's authoritative DNS servers. The only packets sent to target infrastructure are standard HTTP/HTTPS GET requests from `httpx` governed by `-rate`.
@@ -238,6 +244,12 @@ The `hosts` table contains the following fields:
 
 ```text
 host, root, depth, sources, first_seen, last_seen, first_scan, last_scan, alive, url, status, title, server, tech, ips, cdn, waf, length, auth_type, auth_url
+```
+
+Cross-host HTTP references are stored in `host_refs`:
+
+```text
+host, referrer, source, first_seen, last_seen
 ```
 
 ---
@@ -355,7 +367,7 @@ WAF detection runs entirely without intrusive payloads:
 
 ## Limitations
 
-- **Passive Data Dependency:** Discovery relies entirely on passive sources. If an asset has never appeared in certificate transparency logs, DNS datasets, or public indices, passive recursion will not find it.
+- **Passive Data Dependency:** Discovery relies on passive OSINT feeds and in-scope hostnames extracted from HTTP responses during probing. Wildcard-certificate hosts that never appear in public datasets and are never referenced by any reachable in-scope page or asset will not be discovered.
 - **Active DNS Permutations:** `assfin` does not perform active DNS brute-forcing or wordlist permutations.
 - **Depth Saturation:** Most passive sources index all known hostnames in the first pass; recursion past depth 2 rarely yields substantial new hosts on standard targets.
 

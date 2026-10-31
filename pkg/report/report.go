@@ -34,11 +34,16 @@ func RenderReport(s *store.Store, w io.Writer) error {
 	if err != nil {
 		return err
 	}
+	refs, err := s.QueryHostRefs("")
+	if err != nil {
+		return err
+	}
 
 	data := types.ReportData{
 		Generated: time.Now().UTC().Format(time.RFC3339),
 		Roots:     roots,
 		Hosts:     hosts,
+		Refs:      refs,
 	}
 
 	rawJSON, err := json.Marshal(data)

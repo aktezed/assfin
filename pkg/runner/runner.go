@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"slices"
 	"strconv"
 	"strings"
 	"sync"
@@ -23,8 +24,10 @@ import (
 
 // Runner manages the lifecycle and execution of assfin tasks.
 type Runner struct {
-	options *types.Options
-	store   *store.Store
+	options    *types.Options
+	store      *store.Store
+	enumFn     scan.EnumFunc
+	targetAddr string
 }
 
 // NewRunner creates a new assfin runner instance using manual constructor injection.
@@ -87,9 +90,12 @@ func (r *Runner) ExecuteScan(ctx context.Context) error {
 	}
 	r.store = dbStore
 
-	enum, err := scan.NewSubfinder(r.options.SubfinderTimeout, r.options.SubfinderMaxTime, r.options.ProviderConfig)
-	if err != nil {
-		return fmt.Errorf("subfinder init: %w", err)
+	enum := r.enumFn
+	if enum == nil {
+		enum, err = scan.NewSubfinder(r.options.SubfinderTimeout, r.options.SubfinderMaxTime, r.options.ProviderConfig)
+		if err != nil {
+			return fmt.Errorf("subfinder init: %w", err)
+		}
 	}
 
 	totalScanStart := time.Now()
@@ -114,11 +120,15 @@ func (r *Runner) ExecuteScan(ctx context.Context) error {
 			dbErr      error
 			discovered atomic.Int64
 		)
+		seen := map[string]bool{root: true}
+		queried := map[string]bool{root: true}
 		crawlOpts := scan.CrawlOpts{
 			Depth:    r.options.Depth,
 			MaxHosts: r.options.MaxHosts,
 			Conc:     r.options.SubfinderConcurrency,
 			Exclude:  exclude,
+			Seen:     seen,
+			Queried:  queried,
 		}
 
 		enumStart := time.Now()
@@ -158,13 +168,14 @@ func (r *Runner) ExecuteScan(ctx context.Context) error {
 
 		var probeDuration time.Duration
 		if !r.options.NoProbe {
-			probeOpts := scan.ProbeOpts{
-				Threads: r.options.Threads,
-				Timeout: r.options.Timeout,
-				Rate:    r.options.RateLimit,
-				Follow:  r.options.FollowRedirects,
-			}
-			probeDuration, err = r.probeRoot(ctx, dbStore, root, probeOpts)
+			probeDuration, err = r.probeAndDiscover(ctx, dbStore, &scanState{
+				scanID:  scanID,
+				root:    root,
+				exclude: exclude,
+				enum:    enum,
+				seen:    seen,
+				queried: queried,
+			})
 			if err != nil {
 				return fmt.Errorf("probing stopped: %w (partial results saved to %s)", err, dbPath)
 			}
@@ -246,19 +257,160 @@ func (r *Runner) ExecuteScan(ctx context.Context) error {
 	return nil
 }
 
-func (r *Runner) probeRoot(ctx context.Context, dbStore *store.Store, root string, o scan.ProbeOpts) (time.Duration, error) {
-	known, err := dbStore.QueryHosts(types.Filter{Root: root, Depth: -1})
+type scanState struct {
+	scanID  int64
+	root    string
+	exclude []string
+	enum    scan.EnumFunc
+	seen    map[string]bool
+	queried map[string]bool
+}
+
+func (r *Runner) probeAndDiscover(ctx context.Context, dbStore *store.Store, st *scanState) (time.Duration, error) {
+	known, err := dbStore.QueryHosts(types.Filter{Root: st.root, Depth: -1})
 	if err != nil {
 		return 0, err
 	}
-	if err := dbStore.ResetProbe(root); err != nil {
+	if err := dbStore.ResetProbe(st.root); err != nil {
 		return 0, err
 	}
-	hosts := make([]string, len(known))
+	toProbe := make([]string, len(known))
 	for i, h := range known {
-		hosts[i] = h.Host
+		toProbe[i] = h.Host
+		st.seen[h.Host] = true
 	}
 
+	contentDepth := r.options.ContentDepth
+	if contentDepth <= 0 {
+		contentDepth = 1
+	}
+
+	var totalDuration time.Duration
+	for round := 0; len(toProbe) > 0; round++ {
+		extractActive := !r.options.NoContent && round < contentDepth
+		probeOpts := scan.ProbeOpts{
+			Threads:       r.options.Threads,
+			Timeout:       r.options.Timeout,
+			Rate:          r.options.RateLimit,
+			Follow:        r.options.FollowRedirects,
+			Exclude:       st.exclude,
+			ContentAssets: r.options.ContentAssets,
+			TargetAddr:    r.targetAddr,
+		}
+		if extractActive {
+			probeOpts.ExtractRoot = st.root
+		}
+
+		var (
+			refMu     sync.Mutex
+			newSeeds  []string
+			assetURLs []string
+			assetSeen = make(map[string]bool)
+		)
+
+		recordRef := func(referrer, refHost, source string) {
+			if err := dbStore.SaveHostRef(refHost, referrer, source); err != nil {
+				gologger.Warning().Msgf("save ref %s -> %s: %v", referrer, refHost, err)
+			}
+			refMu.Lock()
+			alreadySeen := st.seen[refHost]
+			atCap := r.options.MaxHosts > 0 && len(st.seen) >= r.options.MaxHosts
+			shouldUpsert := alreadySeen
+			if !alreadySeen && !atCap {
+				st.seen[refHost] = true
+				newSeeds = append(newSeeds, refHost)
+				shouldUpsert = true
+			}
+			refMu.Unlock()
+
+			if shouldUpsert {
+				depth := scan.LabelDepth(refHost, st.root)
+				if err := dbStore.UpsertContentHost(st.scanID, st.root, refHost, depth, referrer); err != nil {
+					gologger.Warning().Msgf("upsert content host %s: %v", refHost, err)
+				}
+			}
+		}
+
+		dur, err := r.probeBatch(ctx, dbStore, toProbe, probeOpts, func(host string, p types.Probe) {
+			for _, refHost := range p.Referenced {
+				recordRef(host, refHost, p.RefSources[refHost])
+			}
+			if len(p.AssetURLs) > 0 {
+				refMu.Lock()
+				for _, u := range p.AssetURLs {
+					if !assetSeen[u] {
+						assetSeen[u] = true
+						assetURLs = append(assetURLs, u)
+					}
+				}
+				refMu.Unlock()
+			}
+		})
+		totalDuration += dur
+		if err != nil {
+			return totalDuration, err
+		}
+
+		if extractActive && r.options.ContentAssets > 0 && len(assetURLs) > 0 {
+			assetStart := time.Now()
+			assetRefs := scan.FetchAssetHosts(ctx, assetURLs, probeOpts)
+			totalDuration += time.Since(assetStart)
+			for referrer, discovered := range assetRefs {
+				for refHost, src := range discovered {
+					recordRef(referrer, refHost, src)
+				}
+			}
+		}
+
+		if len(newSeeds) == 0 {
+			break
+		}
+
+		slices.Sort(newSeeds)
+		gologger.Info().Msgf("[%s] content discovery round %d: %d new hosts extracted from HTTP responses",
+			st.root, round+1, len(newSeeds))
+
+		nextBatch := slices.Clone(newSeeds)
+		if r.options.Depth != 0 {
+			feedbackDepth := r.options.Depth
+			if feedbackDepth > 0 {
+				feedbackDepth--
+			}
+			var crawlDBErr error
+			crawlErr := scan.Crawl(ctx, st.root, scan.CrawlOpts{
+				Depth:    feedbackDepth,
+				MaxHosts: r.options.MaxHosts,
+				Conc:     r.options.SubfinderConcurrency,
+				Exclude:  st.exclude,
+				Seeds:    newSeeds,
+				Seen:     st.seen,
+				Queried:  st.queried,
+			}, st.enum, func(h string, sources []string) {
+				nextBatch = append(nextBatch, h)
+				if err := dbStore.UpsertHost(st.scanID, st.root, h, scan.LabelDepth(h, st.root), sources); err != nil && crawlDBErr == nil {
+					crawlDBErr = err
+				}
+			})
+			if crawlDBErr != nil {
+				return totalDuration, crawlDBErr
+			}
+			if crawlErr != nil {
+				return totalDuration, crawlErr
+			}
+		}
+		toProbe = nextBatch
+	}
+
+	return totalDuration, nil
+}
+
+func (r *Runner) probeBatch(
+	ctx context.Context,
+	dbStore *store.Store,
+	hosts []string,
+	o scan.ProbeOpts,
+	onExtra func(host string, p types.Probe),
+) (time.Duration, error) {
 	if len(hosts) == 0 {
 		return 0, nil
 	}
@@ -312,6 +464,9 @@ func (r *Runner) probeRoot(ctx context.Context, dbStore *store.Store, root strin
 	err = scan.Probe(ctx, hosts, o, func(host string, p types.Probe) {
 		if err := dbStore.SaveProbe(host, p); err != nil {
 			gologger.Warning().Msgf("save %s: %v", host, err)
+		}
+		if onExtra != nil {
+			onExtra(host, p)
 		}
 	})
 

@@ -22,10 +22,15 @@ CREATE TABLE IF NOT EXISTS hosts (
   alive INT DEFAULT 0, url TEXT DEFAULT '', status INT DEFAULT 0, title TEXT DEFAULT '',
   server TEXT DEFAULT '', tech TEXT DEFAULT '', ips TEXT DEFAULT '', cdn TEXT DEFAULT '',
   waf TEXT DEFAULT '', length INT DEFAULT 0, auth_type TEXT DEFAULT '', auth_url TEXT DEFAULT '');
+CREATE TABLE IF NOT EXISTS host_refs (
+  host TEXT NOT NULL, referrer TEXT NOT NULL, source TEXT NOT NULL,
+  first_seen TEXT, last_seen TEXT,
+  PRIMARY KEY (host, referrer));
 CREATE INDEX IF NOT EXISTS idx_scans_root ON scans(root);
 CREATE INDEX IF NOT EXISTS idx_hosts_root_depth ON hosts(root, depth);
 CREATE INDEX IF NOT EXISTS idx_hosts_alive ON hosts(alive);
-CREATE INDEX IF NOT EXISTS idx_hosts_status ON hosts(status);`
+CREATE INDEX IF NOT EXISTS idx_hosts_status ON hosts(status);
+CREATE INDEX IF NOT EXISTS idx_host_refs_referrer ON host_refs(referrer);`
 
 const hostCols = `host, root, depth, sources, first_seen, last_seen,
   first_scan = (SELECT max(id) FROM scans s WHERE s.root = hosts.root),
@@ -33,9 +38,11 @@ const hostCols = `host, root, depth, sources, first_seen, last_seen,
 
 // Store handles persistence of scan results and hosts in SQLite.
 type Store struct {
-	db        *sql.DB
-	upsertSt  *sql.Stmt
-	probeSt   *sql.Stmt
+	db              *sql.DB
+	upsertSt        *sql.Stmt
+	contentUpsertSt *sql.Stmt
+	refSt           *sql.Stmt
+	probeSt         *sql.Stmt
 }
 
 // New opens or creates a SQLite database at the specified path.
@@ -73,6 +80,26 @@ ON CONFLICT(host) DO UPDATE SET
 			db.Close()
 			return nil, fmt.Errorf("prepare upsert: %w", err)
 		}
+		st.contentUpsertSt, err = db.Prepare(`
+INSERT INTO hosts(host, root, depth, sources, first_seen, last_seen, first_scan, last_scan)
+VALUES(?,?,?,?,?,?,?,?)
+ON CONFLICT(host) DO UPDATE SET
+  last_seen=excluded.last_seen, last_scan=excluded.last_scan,
+  depth=min(hosts.depth, excluded.depth),
+  sources=CASE WHEN hosts.sources = '' THEN excluded.sources ELSE hosts.sources END`)
+		if err != nil {
+			st.Close()
+			return nil, fmt.Errorf("prepare content upsert: %w", err)
+		}
+		st.refSt, err = db.Prepare(`
+INSERT INTO host_refs(host, referrer, source, first_seen, last_seen)
+VALUES(?,?,?,?,?)
+ON CONFLICT(host, referrer) DO UPDATE SET
+  source=excluded.source, last_seen=excluded.last_seen`)
+		if err != nil {
+			st.Close()
+			return nil, fmt.Errorf("prepare host_refs: %w", err)
+		}
 		st.probeSt, err = db.Prepare(`
 UPDATE hosts SET alive=1, url=?, status=?, title=?, server=?, tech=?, ips=?, cdn=?, waf=?, length=?, auth_type=?, auth_url=?
 WHERE host=?`)
@@ -88,6 +115,12 @@ WHERE host=?`)
 func (s *Store) Close() error {
 	if s.upsertSt != nil {
 		_ = s.upsertSt.Close()
+	}
+	if s.contentUpsertSt != nil {
+		_ = s.contentUpsertSt.Close()
+	}
+	if s.refSt != nil {
+		_ = s.refSt.Close()
 	}
 	if s.probeSt != nil {
 		_ = s.probeSt.Close()
@@ -125,6 +158,55 @@ func (s *Store) UpsertHost(scan int64, root, host string, depth int, sources []s
 	t := now()
 	_, err := s.upsertSt.Exec(host, root, depth, strings.Join(sources, ","), t, t, scan, scan)
 	return err
+}
+
+// UpsertContentHost records a content-derived host without overwriting non-empty passive sources.
+func (s *Store) UpsertContentHost(scan int64, root, host string, depth int, referrer string) error {
+	t := now()
+	src := ""
+	if referrer != "" {
+		src = "content:" + referrer
+	}
+	_, err := s.contentUpsertSt.Exec(host, root, depth, src, t, t, scan, scan)
+	return err
+}
+
+// SaveHostRef records or updates a cross-host reference extracted from HTTP content.
+func (s *Store) SaveHostRef(host, referrer, source string) error {
+	t := now()
+	_, err := s.refSt.Exec(host, referrer, source, t, t)
+	return err
+}
+
+// QueryHostRefs returns content-derived host references, optionally scoped to a root domain.
+func (s *Store) QueryHostRefs(root string) ([]types.HostRef, error) {
+	query := "SELECT r.host, r.referrer, r.source, coalesce(r.first_seen, ''), coalesce(r.last_seen, '') FROM host_refs r"
+	var args []any
+	if root != "" {
+		query += " JOIN hosts h ON h.host = r.host WHERE h.root = ?"
+		args = append(args, root)
+	}
+	query += " ORDER BY r.host, r.referrer"
+
+	rows, err := s.db.Query(query, args...)
+	if err != nil {
+		// Legacy databases opened in read-only mode predate the host_refs table.
+		if strings.Contains(err.Error(), "no such table: host_refs") {
+			return []types.HostRef{}, nil
+		}
+		return nil, err
+	}
+	defer rows.Close()
+
+	out := []types.HostRef{}
+	for rows.Next() {
+		var ref types.HostRef
+		if err := rows.Scan(&ref.Host, &ref.Referrer, &ref.Source, &ref.FirstSeen, &ref.LastSeen); err != nil {
+			return nil, err
+		}
+		out = append(out, ref)
+	}
+	return out, rows.Err()
 }
 
 // SaveProbe updates probe results for a host.

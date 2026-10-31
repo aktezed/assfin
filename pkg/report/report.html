@@ -488,6 +488,16 @@
     font-size: 10.5px;
     font-weight: 600;
   }
+  .badge-content {
+    display: inline-block;
+    padding: 1px 6px;
+    border-radius: 6px;
+    background: var(--well-alt);
+    border: 1px solid var(--line-strong);
+    color: var(--ink);
+    font-size: 10.5px;
+    font-weight: 600;
+  }
   .ext-link {
     display: inline-flex;
     align-items: center;
@@ -724,6 +734,47 @@
   .kv-row dt { color: var(--faint); flex-shrink: 0; }
   .kv-row dd { margin: 0; text-align: right; overflow-wrap: anywhere; font-weight: 500; }
 
+  .ref-list {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+    margin-top: 4px;
+  }
+  .ref-item {
+    padding: 8px 10px;
+    border-radius: 8px;
+    background: var(--well);
+    border: 1px solid var(--line);
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+  }
+  .ref-head {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 8px;
+    font-size: 12px;
+  }
+  .ref-link {
+    all: unset;
+    cursor: pointer;
+    font-family: var(--mono);
+    font-variant-numeric: tabular-nums;
+    font-weight: 600;
+    color: var(--ink);
+    text-decoration: underline;
+    text-underline-offset: 2px;
+  }
+  .ref-link:hover { color: var(--muted); }
+  .ref-link:focus-visible { outline: 2px solid var(--ink); outline-offset: 2px; border-radius: 3px; }
+  .ref-snippet {
+    font-size: 11.5px;
+    color: var(--muted);
+    overflow-wrap: anywhere;
+    word-break: break-word;
+  }
+
   .empty {
     padding: 56px 24px;
     text-align: center;
@@ -905,6 +956,22 @@
       </section>
 
       <section class="facet-card">
+        <div class="facet-head"><span>Discovery Source</span><span class="faint num">origin</span></div>
+        <div class="facet-list" id="facet-source">
+          <button class="facet-btn" type="button" data-source="passive" aria-pressed="false">
+            <span class="facet-bar" id="fbar-src-passive"></span>
+            <span class="facet-name">Passive OSINT</span>
+            <span class="facet-count num" id="fcnt-src-passive">0</span>
+          </button>
+          <button class="facet-btn" type="button" data-source="content" aria-pressed="false">
+            <span class="facet-bar" id="fbar-src-content"></span>
+            <span class="facet-name">Content-Derived</span>
+            <span class="facet-count num" id="fcnt-src-content">0</span>
+          </button>
+        </div>
+      </section>
+
+      <section class="facet-card">
         <div class="facet-head"><span>WAF Vendors</span><span class="faint num">edge</span></div>
         <div class="facet-list" id="facet-waf"></div>
       </section>
@@ -976,6 +1043,7 @@
       <div class="insp-sec" id="insp-prov-sec">
         <h3 class="insp-sec-title">Discovery Provenance</h3>
         <dl class="kv-list" id="insp-prov"></dl>
+        <div class="ref-list" id="insp-refs" hidden></div>
       </div>
     </aside>
   </div>
@@ -1002,11 +1070,13 @@ const DATA = {{ .DataJSON }};
   const fmt = new Intl.NumberFormat();
   const hosts = DATA.hosts || [];
   const rootsData = DATA.roots || [];
+  const refsData = DATA.refs || [];
   const state = {
     q: "",
     key: "",
     status: new Set(),
     auth: "",
+    sourceFilter: "",
     tech: "",
     wafVendor: "",
     depthFilter: null,
@@ -1027,10 +1097,19 @@ const DATA = {{ .DataJSON }};
   const svgNS = "http://www.w3.org/2000/svg";
   const kind = (h) => !h.alive ? "dead" : h.waf ? "waf" : "exposed";
   const rank = (h) => !h.alive ? 2 : h.waf ? 1 : 0;
+  const isContentHost = (h) => Boolean(h.sources && h.sources.startsWith("content:"));
+  const hostSet = new Set();
+  const refsByHost = new Map();
+  refsData.forEach(ref => {
+    if (!ref || !ref.host) return;
+    if (!refsByHost.has(ref.host)) refsByHost.set(ref.host, []);
+    refsByHost.get(ref.host).push(ref);
+  });
 
   hosts.forEach(h => {
+    hostSet.add(h.host);
     h.tech = h.tech || [];
-    h._text = [h.host, h.title, h.tech.join(" "), h.ips, h.waf, h.server, h.cdn].join(" ").toLowerCase();
+    h._text = [h.host, h.title, h.tech.join(" "), h.ips, h.waf, h.server, h.cdn, h.sources || ""].join(" ").toLowerCase();
   });
 
   function makeExtIcon() {
@@ -1076,13 +1155,22 @@ const DATA = {{ .DataJSON }};
       if (totalSec > 0) dur = fmtSec(totalSec);
     }
 
-    const hostCount = state.root ? hosts.filter(h => h.root === state.root).length : hosts.length;
+    const scopedHosts = state.root ? hosts.filter(h => h.root === state.root) : hosts;
+    const hostCount = scopedHosts.length;
+    const contentCount = scopedHosts.filter(isContentHost).length;
     const sub = $("subtitle");
     sub.replaceChildren();
 
     const pCount = el("span", "meta-pill");
     pCount.append(el("strong", "num", fmt.format(hostCount)), document.createTextNode(" subdomains"));
     sub.append(pCount);
+
+    if (contentCount > 0) {
+      const pContent = el("span", "meta-pill");
+      pContent.append(el("strong", "num", fmt.format(contentCount)), document.createTextNode(" via content"));
+      pContent.title = "Subdomains discovered from in-scope HTTP responses";
+      sub.append(pContent);
+    }
 
     if (dur) {
       const pDur = el("span", "meta-pill");
@@ -1117,10 +1205,13 @@ const DATA = {{ .DataJSON }};
     const wafCount = {};
     const depthCount = {};
     const authCount = { register: 0, login_only: 0, landing: 0 };
+    const sourceCount = { passive: 0, content: 0 };
 
     scoped.forEach(h => {
       counts[kind(h)]++;
       if (h.new) counts.new++;
+      if (isContentHost(h)) sourceCount.content++;
+      else sourceCount.passive++;
       if (h.alive && h.status) {
         const sc = String(h.status)[0];
         if (statusCounts[sc] != null) statusCounts[sc]++;
@@ -1155,6 +1246,15 @@ const DATA = {{ .DataJSON }};
       const count = authCount[a] || 0;
       const elemCnt = $("fcnt-auth-" + idKey);
       const elemBar = $("fbar-auth-" + idKey);
+      if (elemCnt) elemCnt.textContent = fmt.format(count);
+      if (elemBar) elemBar.style.width = (count / total * 100) + "%";
+    });
+
+    // Discovery Source Facet
+    ["passive", "content"].forEach(src => {
+      const count = sourceCount[src] || 0;
+      const elemCnt = $("fcnt-src-" + src);
+      const elemBar = $("fbar-src-" + src);
       if (elemCnt) elemCnt.textContent = fmt.format(count);
       if (elemBar) elemBar.style.width = (count / total * 100) + "%";
     });
@@ -1230,6 +1330,7 @@ const DATA = {{ .DataJSON }};
       state.key ||
       state.status.size ||
       state.auth ||
+      state.sourceFilter ||
       state.tech ||
       state.wafVendor ||
       state.depthFilter !== null ||
@@ -1254,6 +1355,10 @@ const DATA = {{ .DataJSON }};
       const authLabel = state.auth === "register" ? "Role: Registerable" : state.auth === "login_only" ? "Role: Login Only" : "Role: Landing Page";
       addChip(authLabel, () => { state.auth = ""; render(); });
     }
+    if (state.sourceFilter) {
+      const srcLabel = state.sourceFilter === "content" ? "Origin: Content-Derived" : "Origin: Passive OSINT";
+      addChip(srcLabel, () => { state.sourceFilter = ""; render(); });
+    }
     if (state.wafVendor) addChip("WAF: " + state.wafVendor, () => { state.wafVendor = ""; render(); });
     if (state.tech) addChip("Tech: " + state.tech, () => { state.tech = ""; render(); });
     if (state.depthFilter !== null) addChip("Depth " + state.depthFilter, () => { state.depthFilter = null; render(); });
@@ -1272,6 +1377,9 @@ const DATA = {{ .DataJSON }};
     });
     document.querySelectorAll("[data-auth]").forEach(b => {
       b.setAttribute("aria-pressed", String(state.auth === b.dataset.auth));
+    });
+    document.querySelectorAll("[data-source]").forEach(b => {
+      b.setAttribute("aria-pressed", String(state.sourceFilter === b.dataset.source));
     });
     $("tech").value = state.tech;
     $("tech").dataset.active = String(Boolean(state.tech));
@@ -1292,6 +1400,10 @@ const DATA = {{ .DataJSON }};
       if (!h.alive) return false;
       const r = h.auth_type || "landing";
       if (r !== state.auth) return false;
+    }
+    if (state.sourceFilter) {
+      const origin = isContentHost(h) ? "content" : "passive";
+      if (origin !== state.sourceFilter) return false;
     }
     if (state.wafVendor) {
       if (!h.alive) return false;
@@ -1341,6 +1453,8 @@ const DATA = {{ .DataJSON }};
       $("insp-net").replaceChildren();
       $("insp-tech").replaceChildren();
       $("insp-prov").replaceChildren();
+      $("insp-refs").replaceChildren();
+      $("insp-refs").hidden = true;
       return;
     }
 
@@ -1356,6 +1470,7 @@ const DATA = {{ .DataJSON }};
       const roleLabel = role === "register" ? "Registerable Asset" : role === "login_only" ? "Login Only" : "Landing Page";
       badges.append(el("span", "auth-badge " + role, roleLabel));
     }
+    if (isContentHost(h)) badges.append(el("span", "badge-content", "content-derived"));
     if (h.new) badges.append(el("span", "badge-new", "new this scan"));
 
     // Actions
@@ -1467,9 +1582,51 @@ const DATA = {{ .DataJSON }};
     const prov = $("insp-prov");
     prov.replaceChildren();
     addKV(prov, "Root Domain", h.root, true);
-    addKV(prov, "Passive Sources", h.sources ? h.sources.split(",").join(", ") : "subfinder", false);
+    const makeReferrerNode = (referrer) => {
+      if (hostSet.has(referrer)) {
+        const btn = el("button", "ref-link", referrer);
+        btn.type = "button";
+        btn.title = "Inspect referrer " + referrer;
+        btn.addEventListener("click", () => selectHost(referrer, true));
+        return btn;
+      }
+      return referrer;
+    };
+    if (isContentHost(h)) {
+      const primaryRef = h.sources.slice("content:".length);
+      addKV(prov, "Discovery Origin", "HTTP Response Content", false);
+      if (primaryRef) addKV(prov, "Primary Referrer", makeReferrerNode(primaryRef), true);
+    } else {
+      addKV(prov, "Passive Sources", h.sources ? h.sources.split(",").join(", ") : "root / seed", false);
+    }
     if (h.first_seen) addKV(prov, "First Seen", new Date(h.first_seen).toLocaleString(), true);
     if (h.last_seen) addKV(prov, "Last Seen", new Date(h.last_seen).toLocaleString(), true);
+
+    const refsBox = $("insp-refs");
+    refsBox.replaceChildren();
+    const hostRefs = refsByHost.get(h.host) || [];
+    if (!hostRefs.length) {
+      refsBox.hidden = true;
+    } else {
+      refsBox.hidden = false;
+      hostRefs.forEach(ref => {
+        const card = el("div", "ref-item");
+        const head = el("div", "ref-head");
+        const viaWrap = el("span");
+        viaWrap.append(el("span", "faint", "via "));
+        const rNode = makeReferrerNode(ref.referrer || "");
+        viaWrap.append(typeof rNode === "string" ? el("span", "num", rNode) : rNode);
+        head.append(viaWrap);
+        if (ref.last_seen) {
+          head.append(el("span", "faint num", new Date(ref.last_seen).toLocaleDateString()));
+        }
+        card.append(head);
+        if (ref.source) {
+          card.append(el("div", "ref-snippet num", ref.source));
+        }
+        refsBox.append(card);
+      });
+    }
   }
 
   function selectHost(hostStr, openPanel) {
@@ -1518,6 +1675,11 @@ const DATA = {{ .DataJSON }};
       nameSpan.append(el("span", null, prefix));
       if (h.host !== h.root) nameSpan.append(el("span", "host-rest", "." + h.root));
       wrap.append(dot, nameSpan);
+      if (isContentHost(h)) {
+        const cb = el("span", "badge-content", "content");
+        cb.title = "Discovered via HTTP response from " + h.sources.slice("content:".length);
+        wrap.append(cb);
+      }
       if (h.new) wrap.append(el("span", "badge-new", "new"));
       if (h.alive) {
         const role = h.auth_type || "landing";
@@ -1635,6 +1797,7 @@ const DATA = {{ .DataJSON }};
     state.key = "";
     state.status.clear();
     state.auth = "";
+    state.sourceFilter = "";
     state.tech = "";
     state.wafVendor = "";
     state.depthFilter = null;
@@ -1707,6 +1870,12 @@ const DATA = {{ .DataJSON }};
     const a = b.dataset.auth;
     state.auth = state.auth === a ? "" : a;
     if (state.auth && state.key === "dead") state.key = "";
+    render();
+  }));
+
+  document.querySelectorAll("[data-source]").forEach(b => b.addEventListener("click", () => {
+    const src = b.dataset.source;
+    state.sourceFilter = state.sourceFilter === src ? "" : src;
     render();
   }));
 

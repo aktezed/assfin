@@ -135,3 +135,61 @@ func TestGetScansSummary(t *testing.T) {
 		t.Errorf("expected non-empty Last")
 	}
 }
+
+func TestContentHostsAndRefs(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "content.db")
+	s, err := New(path, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+
+	scanID, err := s.StartScan("example.gov", "{}")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if err := s.UpsertHost(scanID, "example.gov", "v2.example.gov", 1, []string{"crtsh"}); err != nil {
+		t.Fatal(err)
+	}
+	// Content reference to an already-known CT host must preserve its passive source.
+	if err := s.UpsertContentHost(scanID, "example.gov", "v2.example.gov", 1, "www.example.gov"); err != nil {
+		t.Fatal(err)
+	}
+	// Brand-new content-derived host gets content:<referrer>.
+	if err := s.UpsertContentHost(scanID, "example.gov", "v3.example.gov", 1, "v2.example.gov"); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.SaveHostRef("v3.example.gov", "v2.example.gov", `<a href="https://v3.example.gov">`); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.SaveHostRef("v2.example.gov", "www.example.gov", `<a href="https://v2.example.gov">`); err != nil {
+		t.Fatal(err)
+	}
+
+	hosts, err := s.QueryHosts(types.Filter{Root: "example.gov", Depth: -1})
+	if err != nil {
+		t.Fatal(err)
+	}
+	byHost := make(map[string]types.Host, len(hosts))
+	for _, h := range hosts {
+		byHost[h.Host] = h
+	}
+	if byHost["v2.example.gov"].Sources != "crtsh" {
+		t.Errorf("v2.example.gov sources = %q, want crtsh", byHost["v2.example.gov"].Sources)
+	}
+	if byHost["v3.example.gov"].Sources != "content:v2.example.gov" {
+		t.Errorf("v3.example.gov sources = %q, want content:v2.example.gov", byHost["v3.example.gov"].Sources)
+	}
+
+	refs, err := s.QueryHostRefs("example.gov")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(refs) != 2 {
+		t.Fatalf("expected 2 host_refs, got %d: %+v", len(refs), refs)
+	}
+	if refs[1].Host != "v3.example.gov" || refs[1].Referrer != "v2.example.gov" {
+		t.Errorf("unexpected ref[1]: %+v", refs[1])
+	}
+}

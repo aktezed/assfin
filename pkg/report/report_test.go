@@ -38,6 +38,13 @@ func TestWriteReport(t *testing.T) {
 		t.Fatalf("save probe: %v", err)
 	}
 
+	if err := s.UpsertContentHost(scanID, "example.com", "v3.example.com", 1, "api.example.com"); err != nil {
+		t.Fatalf("upsert content host: %v", err)
+	}
+	if err := s.SaveHostRef("v3.example.com", "api.example.com", `</script><img src=x onerror=alert(1)> https://v3.example.com/portal`); err != nil {
+		t.Fatalf("save host ref: %v", err)
+	}
+
 	if err := s.FinishScan(scanID); err != nil {
 		t.Fatalf("finish scan: %v", err)
 	}
@@ -51,11 +58,21 @@ func TestWriteReport(t *testing.T) {
 	if err != nil {
 		t.Fatalf("read report: %v", err)
 	}
+	html := string(content)
 
-	if !strings.Contains(string(content), "api.example.com") {
+	if !strings.Contains(html, "api.example.com") {
 		t.Errorf("expected report to contain host api.example.com")
 	}
-	if !strings.Contains(string(content), "Cloudflare") {
+	if !strings.Contains(html, "Cloudflare") {
 		t.Errorf("expected report to contain WAF Cloudflare")
+	}
+	if !strings.Contains(html, "content:api.example.com") {
+		t.Errorf("expected report to contain content-derived source provenance")
+	}
+	if !strings.Contains(html, `"refs":[`) {
+		t.Errorf("expected report payload to include refs array")
+	}
+	if strings.Contains(html, "</script><img") {
+		t.Errorf("expected untrusted snippet in DATA JSON to escape </script> tags")
 	}
 }

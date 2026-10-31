@@ -141,3 +141,49 @@ func TestCrawlAllBranches(t *testing.T) {
 		t.Errorf("expected deep children to be discovered across all branches, got %v", found)
 	}
 }
+
+func TestCrawlSeedsFeedback(t *testing.T) {
+	seedTree := map[string][]string{
+		"a.com":    {"v2.a.com"},
+		"v3.a.com": {"api.v3.a.com"},
+	}
+	calls := map[string]int{}
+	seen := map[string]bool{}
+	queried := map[string]bool{}
+	var found []string
+
+	err := Crawl(context.Background(), "a.com", CrawlOpts{
+		Depth:   -1,
+		Conc:    2,
+		Seen:    seen,
+		Queried: queried,
+	}, fakeEnum(seedTree, calls), func(h string, _ []string) {
+		found = append(found, h)
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !slices.Equal(found, []string{"v2.a.com"}) {
+		t.Fatalf("round 0 found %v, want [v2.a.com]", found)
+	}
+
+	var feedbackFound []string
+	err = Crawl(context.Background(), "a.com", CrawlOpts{
+		Depth:   -1,
+		Conc:    2,
+		Seeds:   []string{"portal.v3.a.com"},
+		Seen:    seen,
+		Queried: queried,
+	}, fakeEnum(seedTree, calls), func(h string, _ []string) {
+		feedbackFound = append(feedbackFound, h)
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !slices.Equal(feedbackFound, []string{"api.v3.a.com"}) {
+		t.Fatalf("feedback crawl found %v, want [api.v3.a.com]", feedbackFound)
+	}
+	if calls["a.com"] != 1 || calls["v2.a.com"] != 1 {
+		t.Errorf("already-queried domains should not be re-queried: %v", calls)
+	}
+}

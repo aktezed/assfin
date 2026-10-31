@@ -16,13 +16,14 @@ func PrintTargetSummary(w io.Writer, root string, hosts []types.Host) {
 	}
 
 	var (
-		alive       int
-		wafCount    int
-		fresh       int
-		regHosts    []types.Host
-		loginHosts  []types.Host
-		landHosts   []types.Host
-		unreach     []types.Host
+		alive        int
+		wafCount     int
+		fresh        int
+		regHosts     []types.Host
+		loginHosts   []types.Host
+		landHosts    []types.Host
+		unreach      []types.Host
+		contentHosts []types.Host
 	)
 
 	for _, h := range hosts {
@@ -47,6 +48,9 @@ func PrintTargetSummary(w io.Writer, root string, hosts []types.Host) {
 		if h.New {
 			fresh++
 		}
+		if strings.HasPrefix(h.Sources, "content:") {
+			contentHosts = append(contentHosts, h)
+		}
 	}
 
 	div := strings.Repeat("═", 78)
@@ -57,6 +61,7 @@ func PrintTargetSummary(w io.Writer, root string, hosts []types.Host) {
 	fmt.Fprintln(w, div)
 	fmt.Fprintf(w, "  Total Discovered Subdomains : %-6d  Alive Web Endpoints : %d\n", len(hosts), alive)
 	fmt.Fprintf(w, "  Behind WAF Protection       : %-6d  New In Latest Scan  : %d\n", wafCount, fresh)
+	fmt.Fprintf(w, "  Discovered via Content      : %-6d  (Extended beyond passive CT)\n", len(contentHosts))
 	fmt.Fprintln(w, subDiv)
 	fmt.Fprintln(w, "  ASSET ROLE CLASSIFICATION:")
 	fmt.Fprintf(w, "    [REGISTERABLE] : %-4d (Open registration or sign-up endpoint detected)\n", len(regHosts))
@@ -93,6 +98,23 @@ func PrintTargetSummary(w io.Writer, root string, hosts []types.Host) {
 				wafLabel = fmt.Sprintf(" [%s]", h.WAF)
 			}
 			fmt.Fprintf(w, "    • %-32s -> %s%s\n", h.Host, targetURL, wafLabel)
+		}
+	}
+
+	if len(contentHosts) > 0 {
+		fmt.Fprintln(w, subDiv)
+		fmt.Fprintln(w, "  DISCOVERED VIA CONTENT (Wildcard / Non-CT Assets):")
+		for _, h := range contentHosts {
+			referrer := strings.TrimPrefix(h.Sources, "content:")
+			statusLabel := "dead"
+			if h.Alive {
+				statusLabel = fmt.Sprintf("%d", h.Status)
+			}
+			wafLabel := ""
+			if h.WAF != "" {
+				wafLabel = fmt.Sprintf(" [%s]", h.WAF)
+			}
+			fmt.Fprintf(w, "    • %-32s <- via %s [%s]%s\n", h.Host, referrer, statusLabel, wafLabel)
 		}
 	}
 

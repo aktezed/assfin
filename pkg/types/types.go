@@ -30,17 +30,29 @@ type Host struct {
 
 // Probe is the subset of an httpx result stored per host.
 type Probe struct {
-	URL      string
-	Title    string
-	Server   string
-	IPs      string
-	CDN      string
-	WAF      string
-	Status   int
-	Length   int
-	Tech     []string
-	AuthType string
-	AuthURL  string
+	URL        string
+	Title      string
+	Server     string
+	IPs        string
+	CDN        string
+	WAF        string
+	Status     int
+	Length     int
+	Tech       []string
+	AuthType   string
+	AuthURL    string
+	Referenced []string
+	RefSources map[string]string
+	AssetURLs  []string
+}
+
+// HostRef represents a content-derived reference from referrer to host.
+type HostRef struct {
+	Host      string `json:"host"`
+	Referrer  string `json:"referrer"`
+	Source    string `json:"source"`
+	FirstSeen string `json:"first_seen"`
+	LastSeen  string `json:"last_seen"`
 }
 
 // Filter maps query flags to SQL conditions.
@@ -74,6 +86,7 @@ type ReportData struct {
 	Generated string     `json:"generated"`
 	Roots     []RootInfo `json:"roots"`
 	Hosts     []Host     `json:"hosts"`
+	Refs      []HostRef  `json:"refs,omitempty"`
 }
 
 // FormatDuration formats a time.Duration into a human-friendly string (e.g. 1h 2m 3s, 1m 5s, 5s, or 0.4s).

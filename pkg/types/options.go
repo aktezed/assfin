@@ -36,6 +36,11 @@ type Options struct {
 	NoAuth      bool
 	AuthThreads int
 
+	// Content-Derived Host Discovery
+	NoContent     bool
+	ContentDepth  int
+	ContentAssets int
+
 	// Query / Filtering
 	Query        bool
 	Names        goflags.StringSlice

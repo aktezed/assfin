@@ -13,18 +13,52 @@ type EnumFunc func(ctx context.Context, domain string) (map[string][]string, err
 
 // CrawlOpts defines options for recursive enumeration crawling.
 type CrawlOpts struct {
-	Depth    int      // recursion rounds after the root query (-1 = auto/unlimited until no new hosts, 0 = root only)
-	MaxHosts int      // stop once this many hosts are known
-	Conc     int      // domains enumerated in parallel
-	Exclude  []string // hosts or suffixes to drop
+	Depth    int             // recursion rounds after the root query (-1 = auto/unlimited until no new hosts, 0 = root only)
+	MaxHosts int             // stop once this many hosts are known
+	Conc     int             // domains enumerated in parallel
+	Exclude  []string        // hosts or suffixes to drop
+	Seeds    []string        // optional starting seeds instead of root for feedback rounds
+	Seen     map[string]bool // optional shared seen-hosts set across rounds
+	Queried  map[string]bool // optional shared queried-domains set across rounds
 }
 
-// Crawl queries root, then newly found subdomains level by level until nothing new
-// appears or a cap is hit. onFound is called once per new host (never for root) and is serialized.
+// Crawl queries root (or o.Seeds), then newly found subdomains level by level until nothing new
+// appears or a cap is hit. onFound is called once per new host (never for root or initial seeds) and is serialized.
 func Crawl(ctx context.Context, root string, o CrawlOpts, enum EnumFunc, onFound func(host string, sources []string)) error {
-	seen := map[string]bool{root: true}
-	queried := map[string]bool{root: true}
-	level := []string{root}
+	seen := o.Seen
+	if seen == nil {
+		seen = make(map[string]bool)
+	}
+	seen[root] = true
+
+	queried := o.Queried
+	if queried == nil {
+		queried = make(map[string]bool)
+	}
+
+	var level []string
+	if len(o.Seeds) > 0 {
+		for _, raw := range o.Seeds {
+			s := Normalize(raw)
+			if s == "" || !InScope(s, root, o.Exclude) {
+				continue
+			}
+			seen[s] = true
+			if !queried[s] {
+				queried[s] = true
+				level = append(level, s)
+			}
+			for _, p := range parentBranches(s, root) {
+				if !queried[p] && InScope(p, root, o.Exclude) {
+					queried[p] = true
+					level = append(level, p)
+				}
+			}
+		}
+	} else {
+		queried[root] = true
+		level = []string{root}
+	}
 	var mu sync.Mutex
 	var notifyMu sync.Mutex
 	full := func() bool { return o.MaxHosts > 0 && len(seen) >= o.MaxHosts }

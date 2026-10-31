@@ -85,6 +85,9 @@ func ParseOptions() *types.Options {
 		flagSet.BoolVar(&opts.NoProbe, "no-probe", false, "enumerate only, skip httpx"),
 		flagSet.BoolVar(&opts.NoAuth, "no-auth", false, "skip asset role (register/login/landing) classification"),
 		flagSet.IntVar(&opts.AuthThreads, "auth-threads", 10, "asset classification concurrency threads"),
+		flagSet.BoolVar(&opts.NoContent, "no-content", false, "disable content-derived host discovery from HTTP responses"),
+		flagSet.IntVar(&opts.ContentDepth, "content-depth", 1, "max content-discovery feedback rounds"),
+		flagSet.IntVar(&opts.ContentAssets, "content-assets", 0, "max same-host .js/.json assets inspected per host (0 = off)"),
 	)
 
 	// Query / Filtering
@@ -182,6 +185,14 @@ func validateOptions(opts *types.Options) error {
 
 	if opts.Alive && opts.Dead {
 		return errors.New("conflicting flags: -alive and -dead cannot be used together")
+	}
+
+	if opts.ContentDepth < 0 {
+		return errors.New("-content-depth cannot be negative (use -no-content to disable)")
+	}
+
+	if opts.ContentAssets < 0 {
+		return errors.New("-content-assets cannot be negative")
 	}
 
 	return nil

@@ -498,6 +498,17 @@
     font-size: 10.5px;
     font-weight: 600;
   }
+  .badge-dangling {
+    display: inline-block;
+    padding: 1px 7px;
+    border-radius: 999px;
+    background: var(--ink);
+    border: 1px solid var(--ink);
+    color: #ffffff;
+    font-size: 10.5px;
+    font-weight: 600;
+    width: fit-content;
+  }
   .ext-link {
     display: inline-flex;
     align-items: center;
@@ -594,7 +605,7 @@
     display: flex;
     flex-direction: column;
     gap: 2px;
-    max-width: 165px;
+    max-width: 195px;
   }
   .ip-main {
     font-size: 12px;
@@ -855,7 +866,7 @@
 
     <div class="command-cluster">
       <div class="search-wrap">
-        <input class="search" id="q" type="search" placeholder="Filter host, title, tech, WAF, IP" aria-label="Search hosts">
+        <input class="search" id="q" type="search" placeholder="Filter host, title, tech, WAF, IP, CNAME" aria-label="Search hosts">
         <span class="kbd-hint num">/</span>
       </div>
       <select class="btn" id="root" aria-label="Root domain" data-active="false" hidden><option value="">All roots</option></select>
@@ -972,6 +983,27 @@
       </section>
 
       <section class="facet-card">
+        <div class="facet-head"><span>DNS Records</span><span class="faint num">dnsx</span></div>
+        <div class="facet-list" id="facet-dns">
+          <button class="facet-btn" type="button" data-dns="resolved" aria-pressed="false">
+            <span class="facet-bar" id="fbar-dns-resolved"></span>
+            <span class="facet-name">DNS Resolved</span>
+            <span class="facet-count num" id="fcnt-dns-resolved">0</span>
+          </button>
+          <button class="facet-btn" type="button" data-dns="cname" aria-pressed="false">
+            <span class="facet-bar" id="fbar-dns-cname"></span>
+            <span class="facet-name">Has CNAME</span>
+            <span class="facet-count num" id="fcnt-dns-cname">0</span>
+          </button>
+          <button class="facet-btn" type="button" data-dns="dangling" aria-pressed="false">
+            <span class="facet-bar" id="fbar-dns-dangling"></span>
+            <span class="facet-name">Dangling CNAME</span>
+            <span class="facet-count num" id="fcnt-dns-dangling">0</span>
+          </button>
+        </div>
+      </section>
+
+      <section class="facet-card">
         <div class="facet-head"><span>WAF Vendors</span><span class="faint num">edge</span></div>
         <div class="facet-list" id="facet-waf"></div>
       </section>
@@ -1077,6 +1109,7 @@ const DATA = {{ .DataJSON }};
     status: new Set(),
     auth: "",
     sourceFilter: "",
+    dnsFilter: "",
     tech: "",
     wafVendor: "",
     depthFilter: null,
@@ -1098,6 +1131,7 @@ const DATA = {{ .DataJSON }};
   const kind = (h) => !h.alive ? "dead" : h.waf ? "waf" : "exposed";
   const rank = (h) => !h.alive ? 2 : h.waf ? 1 : 0;
   const isContentHost = (h) => Boolean(h.sources && h.sources.startsWith("content:"));
+  const isDangling = (h) => Boolean(h.cname && !h.ips);
   const hostSet = new Set();
   const refsByHost = new Map();
   refsData.forEach(ref => {
@@ -1109,7 +1143,7 @@ const DATA = {{ .DataJSON }};
   hosts.forEach(h => {
     hostSet.add(h.host);
     h.tech = h.tech || [];
-    h._text = [h.host, h.title, h.tech.join(" "), h.ips, h.waf, h.server, h.cdn, h.sources || ""].join(" ").toLowerCase();
+    h._text = [h.host, h.title, h.tech.join(" "), h.ips, h.cname || "", h.waf, h.server, h.cdn, h.sources || ""].join(" ").toLowerCase();
   });
 
   function makeExtIcon() {
@@ -1158,6 +1192,7 @@ const DATA = {{ .DataJSON }};
     const scopedHosts = state.root ? hosts.filter(h => h.root === state.root) : hosts;
     const hostCount = scopedHosts.length;
     const contentCount = scopedHosts.filter(isContentHost).length;
+    const danglingCount = scopedHosts.filter(isDangling).length;
     const sub = $("subtitle");
     sub.replaceChildren();
 
@@ -1170,6 +1205,13 @@ const DATA = {{ .DataJSON }};
       pContent.append(el("strong", "num", fmt.format(contentCount)), document.createTextNode(" via content"));
       pContent.title = "Subdomains discovered from in-scope HTTP responses";
       sub.append(pContent);
+    }
+
+    if (danglingCount > 0) {
+      const pDangling = el("span", "meta-pill");
+      pDangling.append(el("strong", "num", fmt.format(danglingCount)), document.createTextNode(" dangling CNAME"));
+      pDangling.title = "Hosts with CNAME records whose target did not resolve to an IP";
+      sub.append(pDangling);
     }
 
     if (dur) {
@@ -1206,12 +1248,16 @@ const DATA = {{ .DataJSON }};
     const depthCount = {};
     const authCount = { register: 0, login_only: 0, landing: 0 };
     const sourceCount = { passive: 0, content: 0 };
+    const dnsCount = { resolved: 0, cname: 0, dangling: 0 };
 
     scoped.forEach(h => {
       counts[kind(h)]++;
       if (h.new) counts.new++;
       if (isContentHost(h)) sourceCount.content++;
       else sourceCount.passive++;
+      if (h.ips) dnsCount.resolved++;
+      if (h.cname) dnsCount.cname++;
+      if (isDangling(h)) dnsCount.dangling++;
       if (h.alive && h.status) {
         const sc = String(h.status)[0];
         if (statusCounts[sc] != null) statusCounts[sc]++;
@@ -1259,6 +1305,15 @@ const DATA = {{ .DataJSON }};
       if (elemBar) elemBar.style.width = (count / total * 100) + "%";
     });
 
+    // DNS Records Facet
+    ["resolved", "cname", "dangling"].forEach(d => {
+      const count = dnsCount[d] || 0;
+      const elemCnt = $("fcnt-dns-" + d);
+      const elemBar = $("fbar-dns-" + d);
+      if (elemCnt) elemCnt.textContent = fmt.format(count);
+      if (elemBar) elemBar.style.width = (count / total * 100) + "%";
+    });
+
     // WAF Facet list
     const wafBox = $("facet-waf");
     wafBox.replaceChildren();
@@ -1270,6 +1325,7 @@ const DATA = {{ .DataJSON }};
         wafBox.append(buildFacetRow(w, c, total, state.wafVendor === w, () => {
           state.wafVendor = state.wafVendor === w ? "" : w;
           if (state.wafVendor && state.key === "dead") state.key = "";
+          if (state.wafVendor && state.dnsFilter === "dangling") state.dnsFilter = "";
           render();
         }));
       });
@@ -1331,6 +1387,7 @@ const DATA = {{ .DataJSON }};
       state.status.size ||
       state.auth ||
       state.sourceFilter ||
+      state.dnsFilter ||
       state.tech ||
       state.wafVendor ||
       state.depthFilter !== null ||
@@ -1359,6 +1416,10 @@ const DATA = {{ .DataJSON }};
       const srcLabel = state.sourceFilter === "content" ? "Origin: Content-Derived" : "Origin: Passive OSINT";
       addChip(srcLabel, () => { state.sourceFilter = ""; render(); });
     }
+    if (state.dnsFilter) {
+      const dnsLabel = state.dnsFilter === "dangling" ? "DNS: Dangling CNAME" : state.dnsFilter === "cname" ? "DNS: Has CNAME" : "DNS: Resolved";
+      addChip(dnsLabel, () => { state.dnsFilter = ""; render(); });
+    }
     if (state.wafVendor) addChip("WAF: " + state.wafVendor, () => { state.wafVendor = ""; render(); });
     if (state.tech) addChip("Tech: " + state.tech, () => { state.tech = ""; render(); });
     if (state.depthFilter !== null) addChip("Depth " + state.depthFilter, () => { state.depthFilter = null; render(); });
@@ -1380,6 +1441,9 @@ const DATA = {{ .DataJSON }};
     });
     document.querySelectorAll("[data-source]").forEach(b => {
       b.setAttribute("aria-pressed", String(state.sourceFilter === b.dataset.source));
+    });
+    document.querySelectorAll("[data-dns]").forEach(b => {
+      b.setAttribute("aria-pressed", String(state.dnsFilter === b.dataset.dns));
     });
     $("tech").value = state.tech;
     $("tech").dataset.active = String(Boolean(state.tech));
@@ -1404,6 +1468,11 @@ const DATA = {{ .DataJSON }};
     if (state.sourceFilter) {
       const origin = isContentHost(h) ? "content" : "passive";
       if (origin !== state.sourceFilter) return false;
+    }
+    if (state.dnsFilter) {
+      if (state.dnsFilter === "resolved" && !h.ips) return false;
+      if (state.dnsFilter === "cname" && !h.cname) return false;
+      if (state.dnsFilter === "dangling" && !isDangling(h)) return false;
     }
     if (state.wafVendor) {
       if (!h.alive) return false;
@@ -1436,8 +1505,10 @@ const DATA = {{ .DataJSON }};
       return (String(a.waf).localeCompare(String(b.waf)) || a.host.localeCompare(b.host)) * state.dir;
     }
     if (k === "ips") {
-      if (Boolean(a.ips) !== Boolean(b.ips)) return a.ips ? -1 : 1;
-      return (String(a.ips).localeCompare(String(b.ips), undefined, { numeric: true }) || a.host.localeCompare(b.host)) * state.dir;
+      const hasNetA = Boolean(a.ips || a.cname);
+      const hasNetB = Boolean(b.ips || b.cname);
+      if (hasNetA !== hasNetB) return hasNetA ? -1 : 1;
+      return (String(a.ips || a.cname).localeCompare(String(b.ips || b.cname), undefined, { numeric: true }) || a.host.localeCompare(b.host)) * state.dir;
     }
     const x = a[k], y = b[k];
     const r = typeof x === "number" ? x - y : String(x).localeCompare(String(y));
@@ -1470,6 +1541,7 @@ const DATA = {{ .DataJSON }};
       const roleLabel = role === "register" ? "Registerable Asset" : role === "login_only" ? "Login Only" : "Landing Page";
       badges.append(el("span", "auth-badge " + role, roleLabel));
     }
+    if (isDangling(h)) badges.append(el("span", "badge-dangling", "Dangling CNAME"));
     if (isContentHost(h)) badges.append(el("span", "badge-content", "content-derived"));
     if (h.new) badges.append(el("span", "badge-new", "new this scan"));
 
@@ -1559,6 +1631,7 @@ const DATA = {{ .DataJSON }};
     addKV(net, "Server Banner", h.server || "–", true);
     addKV(net, "CDN Provider", h.cdn || "–", false);
     addKV(net, "Resolved IPs", h.ips || "–", true);
+    addKV(net, "CNAME Chain", h.cname ? h.cname.split(",").join(" → ") : "–", true);
 
     // Tech stack
     const techBox = $("insp-tech");
@@ -1751,9 +1824,21 @@ const DATA = {{ .DataJSON }};
       // IP cell
       const ipTd = el("td");
       const ipStack = el("div", "ip-stack");
-      const ipMain = el("div", "ip-main num", h.ips || "–");
-      if (h.ips) ipMain.title = h.ips;
-      ipStack.append(ipMain);
+      if (isDangling(h)) {
+        const dBadge = el("span", "badge-dangling", "dangling");
+        dBadge.title = "Unresolved CNAME target: " + h.cname;
+        ipStack.append(dBadge);
+      } else {
+        const ipMain = el("div", "ip-main num", h.ips || "–");
+        if (h.ips) ipMain.title = h.ips;
+        ipStack.append(ipMain);
+      }
+      if (h.cname) {
+        const cnameChain = h.cname.split(",").join(" → ");
+        const cnameSub = el("div", "title-sub num", "→ " + cnameChain);
+        cnameSub.title = cnameChain;
+        ipStack.append(cnameSub);
+      }
       ipTd.append(ipStack);
 
       // Depth cell
@@ -1798,6 +1883,7 @@ const DATA = {{ .DataJSON }};
     state.status.clear();
     state.auth = "";
     state.sourceFilter = "";
+    state.dnsFilter = "";
     state.tech = "";
     state.wafVendor = "";
     state.depthFilter = null;
@@ -1856,6 +1942,9 @@ const DATA = {{ .DataJSON }};
       state.status.clear();
       state.wafVendor = "";
     }
+    if ((state.key === "exposed" || state.key === "waf") && state.dnsFilter === "dangling") {
+      state.dnsFilter = "";
+    }
     render();
   }));
 
@@ -1863,6 +1952,7 @@ const DATA = {{ .DataJSON }};
     const s = b.dataset.status;
     state.status.has(s) ? state.status.delete(s) : state.status.add(s);
     if (state.status.size > 0 && state.key === "dead") state.key = "";
+    if (state.status.size > 0 && state.dnsFilter === "dangling") state.dnsFilter = "";
     render();
   }));
 
@@ -1870,12 +1960,25 @@ const DATA = {{ .DataJSON }};
     const a = b.dataset.auth;
     state.auth = state.auth === a ? "" : a;
     if (state.auth && state.key === "dead") state.key = "";
+    if (state.auth && state.dnsFilter === "dangling") state.dnsFilter = "";
     render();
   }));
 
   document.querySelectorAll("[data-source]").forEach(b => b.addEventListener("click", () => {
     const src = b.dataset.source;
     state.sourceFilter = state.sourceFilter === src ? "" : src;
+    render();
+  }));
+
+  document.querySelectorAll("[data-dns]").forEach(b => b.addEventListener("click", () => {
+    const d = b.dataset.dns;
+    state.dnsFilter = state.dnsFilter === d ? "" : d;
+    if (state.dnsFilter === "dangling") {
+      if (state.key === "exposed" || state.key === "waf") state.key = "";
+      state.status.clear();
+      state.auth = "";
+      state.wafVendor = "";
+    }
     render();
   }));
 

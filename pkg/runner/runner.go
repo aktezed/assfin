@@ -27,6 +27,7 @@ type Runner struct {
 	options    *types.Options
 	store      *store.Store
 	enumFn     scan.EnumFunc
+	resolveFn  scan.ResolveFunc
 	targetAddr string
 }
 
@@ -98,6 +99,54 @@ func (r *Runner) ExecuteScan(ctx context.Context) error {
 		}
 	}
 
+	dnsThreads := r.options.DNSThreads
+	if dnsThreads <= 0 {
+		dnsThreads = 100
+	}
+	dnsRate := r.options.DNSRate
+	if dnsRate <= 0 {
+		dnsRate = 500
+	}
+	dnsTimeout := r.options.DNSTimeout
+	if dnsTimeout <= 0 {
+		dnsTimeout = 3
+	}
+
+	var resolve scan.ResolveFunc
+	if !r.options.NoDNS {
+		switch {
+		case r.resolveFn != nil:
+			resolve = r.resolveFn
+		case r.targetAddr != "" && r.options.Resolvers == "":
+			resolve = func(ctx context.Context, _ string, hosts []string, onProgress func(int, int), onResult func(string, types.DNSResult)) error {
+				total := len(hosts)
+				for i, h := range hosts {
+					if err := ctx.Err(); err != nil {
+						return err
+					}
+					if onProgress != nil {
+						onProgress(i+1, total)
+					}
+					if onResult != nil {
+						onResult(scan.Normalize(h), types.DNSResult{IPs: "127.0.0.1", Resolved: true})
+					}
+				}
+				return nil
+			}
+		default:
+			resolve, err = scan.NewResolver(scan.ResolveOpts{
+				Threads:        dnsThreads,
+				Rate:           dnsRate,
+				Timeout:        dnsTimeout,
+				Resolvers:      r.options.Resolvers,
+				WildcardFilter: !r.options.NoWildcard,
+			})
+			if err != nil {
+				return fmt.Errorf("dnsx init: %w", err)
+			}
+		}
+	}
+
 	totalScanStart := time.Now()
 
 	for _, root := range roots {
@@ -142,7 +191,7 @@ func (r *Runner) ExecuteScan(ctx context.Context) error {
 					return
 				case <-t.C:
 					gologger.Info().Msgf("[%s] enumerating... (%s elapsed, %d subdomains found)",
-						root, formatDuration(time.Since(enumStart)), discovered.Load())
+						root, types.FormatDuration(time.Since(enumStart)), discovered.Load())
 				}
 			}
 		}()
@@ -164,18 +213,48 @@ func (r *Runner) ExecuteScan(ctx context.Context) error {
 		}
 
 		gologger.Info().Msgf("[%s] enumeration completed: %d hosts discovered in %s",
-			root, discovered.Load(), formatDuration(enumDuration))
+			root, discovered.Load(), types.FormatDuration(enumDuration))
 
-		var probeDuration time.Duration
-		if !r.options.NoProbe {
-			probeDuration, err = r.probeAndDiscover(ctx, dbStore, &scanState{
-				scanID:  scanID,
-				root:    root,
-				exclude: exclude,
-				enum:    enum,
-				seen:    seen,
-				queried: queried,
-			})
+		st := &scanState{
+			scanID:      scanID,
+			root:        root,
+			exclude:     exclude,
+			enum:        enum,
+			resolve:     resolve,
+			dnsThreads:  dnsThreads,
+			dnsRate:     dnsRate,
+			seen:        seen,
+			queried:     queried,
+			wildcards:   make(map[string]bool),
+			deadContent: make(map[string]bool),
+		}
+
+		var (
+			dnsDuration   time.Duration
+			probeDuration time.Duration
+		)
+
+		if r.options.NoProbe {
+			if resolve != nil {
+				known, qErr := dbStore.QueryHosts(types.Filter{Root: root, Depth: -1})
+				if qErr != nil {
+					return qErr
+				}
+				if rErr := dbStore.ResetDNS(root); rErr != nil {
+					return rErr
+				}
+				knownHosts := make([]string, len(known))
+				for i, h := range known {
+					knownHosts[i] = h.Host
+					st.seen[h.Host] = true
+				}
+				_, dnsDuration, err = r.filterStoredHostsDNS(ctx, dbStore, st, knownHosts)
+				if err != nil {
+					return fmt.Errorf("dns resolution stopped: %w (partial results saved to %s)", err, dbPath)
+				}
+			}
+		} else {
+			dnsDuration, probeDuration, err = r.probeAndDiscover(ctx, dbStore, st)
 			if err != nil {
 				return fmt.Errorf("probing stopped: %w (partial results saved to %s)", err, dbPath)
 			}
@@ -189,7 +268,7 @@ func (r *Runner) ExecuteScan(ctx context.Context) error {
 					if threads <= 0 {
 						threads = 10
 					}
-					scan.ClassifyAliveHosts(ctx, aliveHosts, threads, r.options.Timeout, func(h string, authType, authURL string) {
+					scan.ClassifyAliveHosts(ctx, aliveHosts, threads, r.options.Timeout, r.options.RateLimit, func(h string, authType, authURL string) {
 						_ = dbStore.UpdateAuth(h, authType, authURL)
 					})
 				}
@@ -205,21 +284,32 @@ func (r *Runner) ExecuteScan(ctx context.Context) error {
 			return err
 		}
 
-		var alive, wafCount, fresh int
+		var alive, resolvedCount, danglingCount, wafCount, fresh int
 		for _, h := range all {
 			alive += b2i(h.Alive)
+			resolvedCount += b2i(h.IPs != "")
+			danglingCount += b2i(h.CNAME != "" && h.IPs == "")
 			wafCount += b2i(h.WAF != "")
 			fresh += b2i(h.New)
 		}
 
 		scanDuration := time.Since(scanStart)
-		if r.options.NoProbe {
+		switch {
+		case r.options.NoProbe && r.options.NoDNS:
 			gologger.Info().Msgf("%s: %d hosts, %d new in %s -> %s",
-				root, len(all), fresh, formatDuration(scanDuration), dbPath)
-		} else {
+				root, len(all), fresh, types.FormatDuration(scanDuration), dbPath)
+		case r.options.NoProbe:
+			gologger.Info().Msgf("%s: %d hosts, %d resolved, %d dangling CNAME, %d new in %s (enum: %s, dns: %s) -> %s",
+				root, len(all), resolvedCount, danglingCount, fresh, types.FormatDuration(scanDuration),
+				types.FormatDuration(enumDuration), types.FormatDuration(dnsDuration), dbPath)
+		case r.options.NoDNS:
 			gologger.Info().Msgf("%s: %d hosts, %d alive, %d behind WAF, %d new in %s (enum: %s, probe: %s) -> %s",
-				root, len(all), alive, wafCount, fresh, formatDuration(scanDuration),
-				formatDuration(enumDuration), formatDuration(probeDuration), dbPath)
+				root, len(all), alive, wafCount, fresh, types.FormatDuration(scanDuration),
+				types.FormatDuration(enumDuration), types.FormatDuration(probeDuration), dbPath)
+		default:
+			gologger.Info().Msgf("%s: %d hosts, %d resolved, %d alive, %d dangling CNAME, %d behind WAF, %d new in %s (enum: %s, dns: %s, probe: %s) -> %s",
+				root, len(all), resolvedCount, alive, danglingCount, wafCount, fresh, types.FormatDuration(scanDuration),
+				types.FormatDuration(enumDuration), types.FormatDuration(dnsDuration), types.FormatDuration(probeDuration), dbPath)
 		}
 
 		if !r.options.Silent {
@@ -228,56 +318,84 @@ func (r *Runner) ExecuteScan(ctx context.Context) error {
 	}
 
 	if len(roots) > 1 {
-		gologger.Info().Msgf("all %d domains scanned in %s", len(roots), formatDuration(time.Since(totalScanStart)))
+		gologger.Info().Msgf("all %d domains scanned in %s", len(roots), types.FormatDuration(time.Since(totalScanStart)))
+	}
+
+	scopeRoot := ""
+	if len(roots) == 1 {
+		scopeRoot = roots[0]
 	}
 
 	if r.options.Report || r.options.ReportOutput != "" {
 		out := r.options.ReportOutput
 		if out == "" {
-			if len(roots) == 1 {
-				out = roots[0] + "-report.html"
+			if scopeRoot != "" {
+				out = scopeRoot + "-report.html"
 			} else {
 				out = "assfin-report.html"
 			}
 		}
-		if err := report.WriteReport(dbStore, out); err != nil {
+		if err := report.WriteScopedReport(dbStore, scopeRoot, out); err != nil {
 			return fmt.Errorf("write report: %w", err)
 		}
 		gologger.Info().Msgf("report written to %s", out)
 	}
 
 	if r.options.Serve != "" {
-		listenAddr := r.options.Serve
-		if listenAddr == "true" {
-			listenAddr = fmt.Sprintf(":%d", r.options.Port)
-		}
-		return RunServer(ctx, dbStore, listenAddr)
+		return runScopedServer(ctx, dbStore, resolveServeAddr(r.options.Serve, r.options.Port), scopeRoot)
 	}
 
 	return nil
 }
 
 type scanState struct {
-	scanID  int64
-	root    string
-	exclude []string
-	enum    scan.EnumFunc
-	seen    map[string]bool
-	queried map[string]bool
+	scanID      int64
+	root        string
+	exclude     []string
+	enum        scan.EnumFunc
+	resolve     scan.ResolveFunc
+	dnsThreads  int
+	dnsRate     int
+	seen        map[string]bool
+	queried     map[string]bool
+	wildcards   map[string]bool
+	deadContent map[string]bool
 }
 
-func (r *Runner) probeAndDiscover(ctx context.Context, dbStore *store.Store, st *scanState) (time.Duration, error) {
+type pendingRef struct {
+	referrer string
+	source   string
+}
+
+func (r *Runner) probeAndDiscover(ctx context.Context, dbStore *store.Store, st *scanState) (time.Duration, time.Duration, error) {
 	known, err := dbStore.QueryHosts(types.Filter{Root: st.root, Depth: -1})
 	if err != nil {
-		return 0, err
+		return 0, 0, err
 	}
 	if err := dbStore.ResetProbe(st.root); err != nil {
-		return 0, err
+		return 0, 0, err
 	}
-	toProbe := make([]string, len(known))
+	knownHosts := make([]string, len(known))
 	for i, h := range known {
-		toProbe[i] = h.Host
+		knownHosts[i] = h.Host
 		st.seen[h.Host] = true
+	}
+
+	var (
+		totalDNSDuration   time.Duration
+		totalProbeDuration time.Duration
+		toProbe            []string
+	)
+
+	if st.resolve != nil {
+		var dnsDur time.Duration
+		toProbe, dnsDur, err = r.filterStoredHostsDNS(ctx, dbStore, st, knownHosts)
+		totalDNSDuration += dnsDur
+		if err != nil {
+			return totalDNSDuration, 0, err
+		}
+	} else {
+		toProbe = knownHosts
 	}
 
 	contentDepth := r.options.ContentDepth
@@ -285,7 +403,6 @@ func (r *Runner) probeAndDiscover(ctx context.Context, dbStore *store.Store, st 
 		contentDepth = 1
 	}
 
-	var totalDuration time.Duration
 	for round := 0; len(toProbe) > 0; round++ {
 		extractActive := !r.options.NoContent && round < contentDepth
 		probeOpts := scan.ProbeOpts{
@@ -302,33 +419,43 @@ func (r *Runner) probeAndDiscover(ctx context.Context, dbStore *store.Store, st 
 		}
 
 		var (
-			refMu     sync.Mutex
-			newSeeds  []string
-			assetURLs []string
-			assetSeen = make(map[string]bool)
+			refMu        sync.Mutex
+			pendingHosts []string
+			pendingRefs  = make(map[string][]pendingRef)
+			assetURLs    []string
+			assetSeen    = make(map[string]bool)
 		)
 
 		recordRef := func(referrer, refHost, source string) {
-			if err := dbStore.SaveHostRef(refHost, referrer, source); err != nil {
-				gologger.Warning().Msgf("save ref %s -> %s: %v", referrer, refHost, err)
-			}
 			refMu.Lock()
-			alreadySeen := st.seen[refHost]
-			atCap := r.options.MaxHosts > 0 && len(st.seen) >= r.options.MaxHosts
-			shouldUpsert := alreadySeen
-			if !alreadySeen && !atCap {
-				st.seen[refHost] = true
-				newSeeds = append(newSeeds, refHost)
-				shouldUpsert = true
+			if st.wildcards[refHost] || st.deadContent[refHost] {
+				refMu.Unlock()
+				return
 			}
-			refMu.Unlock()
-
-			if shouldUpsert {
+			if existing, isPending := pendingRefs[refHost]; isPending {
+				pendingRefs[refHost] = append(existing, pendingRef{referrer: referrer, source: source})
+				refMu.Unlock()
+				return
+			}
+			if st.seen[refHost] {
+				refMu.Unlock()
+				if err := dbStore.SaveHostRef(refHost, referrer, source); err != nil {
+					gologger.Warning().Msgf("save ref %s -> %s: %v", referrer, refHost, err)
+				}
 				depth := scan.LabelDepth(refHost, st.root)
 				if err := dbStore.UpsertContentHost(st.scanID, st.root, refHost, depth, referrer); err != nil {
 					gologger.Warning().Msgf("upsert content host %s: %v", refHost, err)
 				}
+				return
 			}
+			if r.options.MaxHosts > 0 && len(st.seen) >= r.options.MaxHosts {
+				refMu.Unlock()
+				return
+			}
+			st.seen[refHost] = true
+			pendingHosts = append(pendingHosts, refHost)
+			pendingRefs[refHost] = []pendingRef{{referrer: referrer, source: source}}
+			refMu.Unlock()
 		}
 
 		dur, err := r.probeBatch(ctx, dbStore, toProbe, probeOpts, func(host string, p types.Probe) {
@@ -346,15 +473,15 @@ func (r *Runner) probeAndDiscover(ctx context.Context, dbStore *store.Store, st 
 				refMu.Unlock()
 			}
 		})
-		totalDuration += dur
+		totalProbeDuration += dur
 		if err != nil {
-			return totalDuration, err
+			return totalDNSDuration, totalProbeDuration, err
 		}
 
 		if extractActive && r.options.ContentAssets > 0 && len(assetURLs) > 0 {
 			assetStart := time.Now()
 			assetRefs := scan.FetchAssetHosts(ctx, assetURLs, probeOpts)
-			totalDuration += time.Since(assetStart)
+			totalProbeDuration += time.Since(assetStart)
 			for referrer, discovered := range assetRefs {
 				for refHost, src := range discovered {
 					recordRef(referrer, refHost, src)
@@ -362,46 +489,267 @@ func (r *Runner) probeAndDiscover(ctx context.Context, dbStore *store.Store, st 
 			}
 		}
 
-		if len(newSeeds) == 0 {
+		if len(pendingHosts) == 0 {
 			break
 		}
 
-		slices.Sort(newSeeds)
-		gologger.Info().Msgf("[%s] content discovery round %d: %d new hosts extracted from HTTP responses",
-			st.root, round+1, len(newSeeds))
+		slices.Sort(pendingHosts)
 
-		nextBatch := slices.Clone(newSeeds)
+		var (
+			verifiedSeeds  []string
+			nextProbeBatch []string
+		)
+
+		persistContentCandidate := func(h string) {
+			refs := pendingRefs[h]
+			firstReferrer := ""
+			if len(refs) > 0 {
+				firstReferrer = refs[0].referrer
+			}
+			depth := scan.LabelDepth(h, st.root)
+			if err := dbStore.UpsertContentHost(st.scanID, st.root, h, depth, firstReferrer); err != nil {
+				gologger.Warning().Msgf("upsert content host %s: %v", h, err)
+			}
+			for _, pr := range refs {
+				if err := dbStore.SaveHostRef(h, pr.referrer, pr.source); err != nil {
+					gologger.Warning().Msgf("save ref %s -> %s: %v", pr.referrer, h, err)
+				}
+			}
+		}
+
+		if st.resolve != nil {
+			resMap, dnsDur, rErr := r.resolveBatch(ctx, st, pendingHosts)
+			totalDNSDuration += dnsDur
+
+			var wildcardDropped, deadDropped, danglingFound int
+			for _, h := range pendingHosts {
+				res, ok := resMap[scan.Normalize(h)]
+				if !ok {
+					continue
+				}
+				if res.Wildcard {
+					st.wildcards[h] = true
+					wildcardDropped++
+					continue
+				}
+				if !res.Resolved && res.CNAME == "" {
+					st.deadContent[h] = true
+					deadDropped++
+					continue
+				}
+				persistContentCandidate(h)
+				if err := dbStore.SaveDNS(h, res); err != nil {
+					gologger.Warning().Msgf("save dns %s: %v", h, err)
+				}
+				verifiedSeeds = append(verifiedSeeds, h)
+				if res.Resolved {
+					nextProbeBatch = append(nextProbeBatch, h)
+				} else {
+					danglingFound++
+				}
+			}
+			if rErr != nil {
+				return totalDNSDuration, totalProbeDuration, rErr
+			}
+			gologger.Info().Msgf("[%s] content discovery round %d: %d candidates extracted -> %d verified (%d resolved, %d dangling CNAME, %d wildcard dropped, %d unresolvable dropped)",
+				st.root, round+1, len(pendingHosts), len(verifiedSeeds), len(nextProbeBatch), danglingFound, wildcardDropped, deadDropped)
+		} else {
+			for _, h := range pendingHosts {
+				persistContentCandidate(h)
+				verifiedSeeds = append(verifiedSeeds, h)
+				nextProbeBatch = append(nextProbeBatch, h)
+			}
+			gologger.Info().Msgf("[%s] content discovery round %d: %d new hosts extracted from HTTP responses",
+				st.root, round+1, len(verifiedSeeds))
+		}
+
+		if len(verifiedSeeds) == 0 {
+			break
+		}
+
 		if r.options.Depth != 0 {
 			feedbackDepth := r.options.Depth
 			if feedbackDepth > 0 {
 				feedbackDepth--
 			}
-			var crawlDBErr error
+			var (
+				crawlDBErr error
+				crawlFound []string
+			)
 			crawlErr := scan.Crawl(ctx, st.root, scan.CrawlOpts{
 				Depth:    feedbackDepth,
 				MaxHosts: r.options.MaxHosts,
 				Conc:     r.options.SubfinderConcurrency,
 				Exclude:  st.exclude,
-				Seeds:    newSeeds,
+				Seeds:    verifiedSeeds,
 				Seen:     st.seen,
 				Queried:  st.queried,
 			}, st.enum, func(h string, sources []string) {
-				nextBatch = append(nextBatch, h)
+				crawlFound = append(crawlFound, h)
 				if err := dbStore.UpsertHost(st.scanID, st.root, h, scan.LabelDepth(h, st.root), sources); err != nil && crawlDBErr == nil {
 					crawlDBErr = err
 				}
 			})
 			if crawlDBErr != nil {
-				return totalDuration, crawlDBErr
+				return totalDNSDuration, totalProbeDuration, crawlDBErr
 			}
 			if crawlErr != nil {
-				return totalDuration, crawlErr
+				return totalDNSDuration, totalProbeDuration, crawlErr
+			}
+			if len(crawlFound) > 0 {
+				if st.resolve != nil {
+					resolvedChildren, dnsDur, rErr := r.filterStoredHostsDNS(ctx, dbStore, st, crawlFound)
+					totalDNSDuration += dnsDur
+					if rErr != nil {
+						return totalDNSDuration, totalProbeDuration, rErr
+					}
+					nextProbeBatch = append(nextProbeBatch, resolvedChildren...)
+				} else {
+					nextProbeBatch = append(nextProbeBatch, crawlFound...)
+				}
 			}
 		}
-		toProbe = nextBatch
+		toProbe = nextProbeBatch
 	}
 
-	return totalDuration, nil
+	return totalDNSDuration, totalProbeDuration, nil
+}
+
+func (r *Runner) filterStoredHostsDNS(
+	ctx context.Context,
+	dbStore *store.Store,
+	st *scanState,
+	hosts []string,
+) ([]string, time.Duration, error) {
+	if len(hosts) == 0 {
+		return nil, 0, nil
+	}
+
+	resMap, dur, err := r.resolveBatch(ctx, st, hosts)
+
+	var (
+		resolved      []string
+		wildcards     []string
+		danglingCount int
+		deadCount     int
+	)
+	for _, h := range hosts {
+		res, ok := resMap[scan.Normalize(h)]
+		if !ok {
+			continue
+		}
+		if res.Wildcard {
+			st.wildcards[h] = true
+			wildcards = append(wildcards, h)
+			continue
+		}
+		if res.Resolved || res.CNAME != "" {
+			if sErr := dbStore.SaveDNS(h, res); sErr != nil {
+				gologger.Warning().Msgf("save dns %s: %v", h, sErr)
+			}
+		}
+		switch {
+		case res.Resolved:
+			resolved = append(resolved, h)
+		case res.CNAME != "":
+			danglingCount++
+		default:
+			deadCount++
+		}
+	}
+
+	if len(wildcards) > 0 {
+		if dErr := dbStore.DeleteHosts(st.root, wildcards); dErr != nil {
+			return nil, dur, dErr
+		}
+	}
+
+	if err != nil {
+		return nil, dur, err
+	}
+
+	gologger.Info().Msgf("[%s] dns resolution completed: %d/%d resolved, %d dangling CNAME, %d wildcard pruned, %d dead skipped in %s",
+		st.root, len(resolved), len(hosts), danglingCount, len(wildcards), deadCount, types.FormatDuration(dur))
+
+	return resolved, dur, nil
+}
+
+func newBatchProgress(verb, rateUnit string, start time.Time) (func(completed, total int), func()) {
+	var (
+		lastUpdate time.Time
+		lastLog    time.Time
+		updateMu   sync.Mutex
+	)
+	fi, err := os.Stderr.Stat()
+	isTTY := err == nil && (fi.Mode()&os.ModeCharDevice) != 0
+
+	onProgress := func(completed, total int) {
+		updateMu.Lock()
+		defer updateMu.Unlock()
+
+		now := time.Now()
+		elapsed := now.Sub(start)
+		pct := float64(completed) / float64(total) * 100
+		speed := float64(completed) / elapsed.Seconds()
+
+		eta := "finishing..."
+		if speed > 0 && completed < total {
+			remSec := float64(total-completed) / speed
+			eta = "~" + types.FormatDuration(time.Duration(remSec*float64(time.Second))) + " remaining"
+		}
+
+		if isTTY {
+			if completed < total && now.Sub(lastUpdate) < 250*time.Millisecond {
+				return
+			}
+			lastUpdate = now
+			fmt.Fprintf(os.Stderr, "\r\033[K[INF] %s %d/%d (%.0f%%) | %s elapsed | %s (%d %s)",
+				verb, completed, total, pct, types.FormatDuration(elapsed), eta, int(speed), rateUnit)
+			return
+		}
+		if completed < total && now.Sub(lastLog) < 5*time.Second {
+			return
+		}
+		lastLog = now
+		gologger.Info().Msgf("%s %d/%d (%.0f%%) | %s elapsed | %s",
+			verb, completed, total, pct, types.FormatDuration(elapsed), eta)
+	}
+
+	clearTTY := func() {
+		if isTTY {
+			fmt.Fprint(os.Stderr, "\r\033[K")
+		}
+	}
+	return onProgress, clearTTY
+}
+
+func (r *Runner) resolveBatch(
+	ctx context.Context,
+	st *scanState,
+	hosts []string,
+) (map[string]types.DNSResult, time.Duration, error) {
+	results := make(map[string]types.DNSResult, len(hosts))
+	if len(hosts) == 0 || st.resolve == nil {
+		return results, 0, nil
+	}
+
+	gologger.Info().Msgf("[%s] resolving %d hosts via dnsx (%d qps, %d threads)",
+		st.root, len(hosts), st.dnsRate, st.dnsThreads)
+
+	resolveStart := time.Now()
+	onProgress, clearTTY := newBatchProgress("resolving", "qps", resolveStart)
+
+	var resMu sync.Mutex
+	err := st.resolve(ctx, st.root, hosts, onProgress, func(host string, res types.DNSResult) {
+		resMu.Lock()
+		results[scan.Normalize(host)] = res
+		resMu.Unlock()
+	})
+
+	dur := time.Since(resolveStart)
+	clearTTY()
+
+	return results, dur, err
 }
 
 func (r *Runner) probeBatch(
@@ -418,50 +766,10 @@ func (r *Runner) probeBatch(
 	gologger.Info().Msgf("probing %d hosts (%d req/s, %d threads)", len(hosts), o.Rate, o.Threads)
 
 	probeStart := time.Now()
-	var (
-		lastUpdate time.Time
-		lastLog    time.Time
-		updateMu   sync.Mutex
-	)
+	var clearTTY func()
+	o.OnProgress, clearTTY = newBatchProgress("probing", "req/s", probeStart)
 
-	fi, err := os.Stderr.Stat()
-	isTTY := err == nil && (fi.Mode()&os.ModeCharDevice) != 0
-
-	o.OnProgress = func(completed, total int) {
-		updateMu.Lock()
-		defer updateMu.Unlock()
-
-		now := time.Now()
-		elapsed := now.Sub(probeStart)
-		pct := float64(completed) / float64(total) * 100
-		speed := float64(completed) / elapsed.Seconds()
-
-		var eta string
-		if speed > 0 && completed < total {
-			remSec := float64(total-completed) / speed
-			eta = "~" + formatDuration(time.Duration(remSec*float64(time.Second))) + " remaining"
-		} else {
-			eta = "finishing..."
-		}
-
-		if isTTY {
-			if completed < total && now.Sub(lastUpdate) < 250*time.Millisecond {
-				return
-			}
-			lastUpdate = now
-			fmt.Fprintf(os.Stderr, "\r\033[K[INF] probing %d/%d (%.0f%%) | %s elapsed | %s (%d req/s)",
-				completed, total, pct, formatDuration(elapsed), eta, int(speed))
-		} else {
-			if completed < total && now.Sub(lastLog) < 5*time.Second {
-				return
-			}
-			lastLog = now
-			gologger.Info().Msgf("probing %d/%d (%.0f%%) | %s elapsed | %s",
-				completed, total, pct, formatDuration(elapsed), eta)
-		}
-	}
-
-	err = scan.Probe(ctx, hosts, o, func(host string, p types.Probe) {
+	err := scan.Probe(ctx, hosts, o, func(host string, p types.Probe) {
 		if err := dbStore.SaveProbe(host, p); err != nil {
 			gologger.Warning().Msgf("save %s: %v", host, err)
 		}
@@ -471,16 +779,14 @@ func (r *Runner) probeBatch(
 	})
 
 	probeDuration := time.Since(probeStart)
-	if isTTY {
-		fmt.Fprint(os.Stderr, "\r\033[K")
-	}
+	clearTTY()
 
 	var speed int
 	if probeDuration.Seconds() > 0 {
 		speed = int(float64(len(hosts)) / probeDuration.Seconds())
 	}
 	gologger.Info().Msgf("probing completed: %d hosts probed in %s (%d req/s)",
-		len(hosts), formatDuration(probeDuration), speed)
+		len(hosts), types.FormatDuration(probeDuration), speed)
 
 	return probeDuration, err
 }
@@ -516,18 +822,22 @@ func (r *Runner) ExecuteQuery(ctx context.Context) error {
 	}
 
 	f := types.Filter{
-		Names:    r.options.Names,
-		Tech:     r.options.Tech,
-		WAF:      pick(r.options.HasWAF, r.options.NoWAF),
-		WAFName:  r.options.WAFName,
-		Alive:    pick(r.options.Alive, r.options.Dead),
-		New:      r.options.NewOnly,
-		Depth:    r.options.FilterDepth,
-		Root:     target,
-		AuthType: r.options.AuthType,
+		Names:       r.options.Names,
+		Tech:        r.options.Tech,
+		WAF:         pick(r.options.HasWAF, r.options.NoWAF),
+		WAFName:     r.options.WAFName,
+		Alive:       pick(r.options.Alive, r.options.Dead),
+		Resolved:    pick(r.options.Resolved, false),
+		HasCNAME:    r.options.HasCNAME,
+		CNAMETarget: r.options.CNAMETarget,
+		Dangling:    r.options.Dangling,
+		New:         r.options.NewOnly,
+		Depth:       r.options.FilterDepth,
+		Root:        target,
+		AuthType:    r.options.AuthType,
 	}
 
-	for _, s := range strings.Split(r.options.Status, ",") {
+	for s := range strings.SplitSeq(r.options.Status, ",") {
 		if s = strings.TrimSpace(s); s == "" {
 			continue
 		}
@@ -544,7 +854,7 @@ func (r *Runner) ExecuteQuery(ctx context.Context) error {
 	}
 
 	// If a specific target was requested and default table output is used without sub-filters, print the dossier
-	if r.options.Target != "" && r.options.OutputFormat == "table" && len(r.options.Names) == 0 && len(r.options.Tech) == 0 && r.options.AuthType == "" && r.options.Status == "" {
+	if r.options.Target != "" && r.options.OutputFormat == "table" && !hasQuerySubFilters(r.options) {
 		PrintTargetSummary(os.Stdout, r.options.Target, hosts)
 		return nil
 	}
@@ -563,7 +873,7 @@ func (r *Runner) ExecuteQuery(ctx context.Context) error {
 		return enc.Encode(hosts)
 	case "table":
 		w := tabwriter.NewWriter(os.Stdout, 0, 0, 2, ' ', 0)
-		fmt.Fprintln(w, "HOST\tSTATUS\tAUTH\tTITLE\tTECH\tWAF\tIPS")
+		fmt.Fprintln(w, "HOST\tSTATUS\tAUTH\tTITLE\tTECH\tWAF\tIPS\tCNAME")
 		for _, h := range hosts {
 			st := "-"
 			if h.Alive {
@@ -573,7 +883,12 @@ func (r *Runner) ExecuteQuery(ctx context.Context) error {
 			if h.AuthType != "" {
 				auth = h.AuthType
 			}
-			fmt.Fprintf(w, "%s\t%s\t%s\t%s\t%s\t%s\t%s\n", h.Host, st, auth, clip(h.Title, 35), clip(strings.Join(h.Tech, ","), 35), h.WAF, h.IPs)
+			cname := "-"
+			if h.CNAME != "" {
+				cname = types.ClipRunes(h.CNAME, 35)
+			}
+			fmt.Fprintf(w, "%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n",
+				h.Host, st, auth, types.ClipRunes(h.Title, 35), types.ClipRunes(strings.Join(h.Tech, ","), 35), h.WAF, h.IPs, cname)
 		}
 		if err := w.Flush(); err != nil {
 			return err
@@ -598,31 +913,24 @@ func (r *Runner) ExecuteReport(ctx context.Context) error {
 	}
 	r.store = dbStore
 
+	scopeRoot := r.requestedScopeRoot()
 	out := r.options.ReportOutput
 	if out == "" {
-		if r.options.Domain != "" {
-			out = r.options.Domain + "-report.html"
-		} else if r.options.Target != "" {
-			out = r.options.Target + "-report.html"
-		} else if r.options.FilterRoot != "" {
-			out = r.options.FilterRoot + "-report.html"
+		if scopeRoot != "" {
+			out = scopeRoot + "-report.html"
 		} else {
 			out = "report.html"
 		}
 	}
 
-	if err := report.WriteReport(dbStore, out); err != nil {
+	if err := report.WriteScopedReport(dbStore, scopeRoot, out); err != nil {
 		return err
 	}
 
 	gologger.Info().Msgf("report written to %s", out)
 
 	if r.options.Serve != "" {
-		listenAddr := r.options.Serve
-		if listenAddr == "true" {
-			listenAddr = fmt.Sprintf(":%d", r.options.Port)
-		}
-		return RunServer(ctx, dbStore, listenAddr)
+		return runScopedServer(ctx, dbStore, resolveServeAddr(r.options.Serve, r.options.Port), scopeRoot)
 	}
 
 	return nil
@@ -640,16 +948,20 @@ func (r *Runner) ExecuteServe(ctx context.Context) error {
 	}
 	r.store = dbStore
 
-	listenAddr := r.options.Serve
-	if listenAddr == "" || listenAddr == "true" {
-		port := r.options.Port
-		if port <= 0 {
-			port = 8080
-		}
-		listenAddr = fmt.Sprintf(":%d", port)
-	}
+	return runScopedServer(ctx, dbStore, resolveServeAddr(r.options.Serve, r.options.Port), r.requestedScopeRoot())
+}
 
-	return RunServer(ctx, dbStore, listenAddr)
+func (r *Runner) requestedScopeRoot() string {
+	switch {
+	case r.options.Target != "":
+		return scan.Normalize(r.options.Target)
+	case r.options.FilterRoot != "":
+		return scan.Normalize(r.options.FilterRoot)
+	case r.options.Domain != "":
+		return scan.Normalize(r.options.Domain)
+	default:
+		return ""
+	}
 }
 
 func readRoots(domain, list string) ([]string, error) {
@@ -699,15 +1011,4 @@ func b2i(b bool) int {
 		return 1
 	}
 	return 0
-}
-
-func clip(s string, n int) string {
-	if r := []rune(s); len(r) > n {
-		return string(r[:n-1]) + "…"
-	}
-	return s
-}
-
-func formatDuration(d time.Duration) string {
-	return types.FormatDuration(d)
 }

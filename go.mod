@@ -3,10 +3,16 @@ module github.com/aktezed/assfin
 go 1.27.1
 
 require (
+	github.com/miekg/dns v1.1.73
+	github.com/projectdiscovery/dnsx v1.3.1
 	github.com/projectdiscovery/goflags v0.2.1
 	github.com/projectdiscovery/gologger v1.1.73
 	github.com/projectdiscovery/httpx v1.12.0
+	github.com/projectdiscovery/retryabledns v1.0.116
 	github.com/projectdiscovery/subfinder/v2 v2.17.0
+	github.com/projectdiscovery/utils v0.11.6
+	golang.org/x/net v0.59.0
+	golang.org/x/time v0.15.0
 	modernc.org/sqlite v1.61.0
 )
 
@@ -77,7 +83,6 @@ require (
 	github.com/mattn/go-runewidth v0.0.16 // indirect
 	github.com/mfonda/simhash v0.0.0-20151007195837-79f94a1100d6 // indirect
 	github.com/microcosm-cc/bluemonday v1.0.27 // indirect
-	github.com/miekg/dns v1.1.73 // indirect
 	github.com/minio/selfupdate v0.6.1-0.20230907112617-f11e74f84ca7 // indirect
 	github.com/modern-go/concurrent v0.0.0-20180306012644-bacd9c7ef1dd // indirect
 	github.com/modern-go/reflect2 v1.0.2 // indirect
@@ -93,7 +98,6 @@ require (
 	github.com/projectdiscovery/cdncheck v1.3.1 // indirect
 	github.com/projectdiscovery/chaos-client v0.5.2 // indirect
 	github.com/projectdiscovery/clistats v0.1.6 // indirect
-	github.com/projectdiscovery/dnsx v1.3.1 // indirect
 	github.com/projectdiscovery/dsl v0.8.22 // indirect
 	github.com/projectdiscovery/fastdialer v0.5.22 // indirect
 	github.com/projectdiscovery/fdmax v0.0.4 // indirect
@@ -108,11 +112,9 @@ require (
 	github.com/projectdiscovery/networkpolicy v0.1.52 // indirect
 	github.com/projectdiscovery/ratelimit v0.0.92 // indirect
 	github.com/projectdiscovery/rawhttp v0.1.92 // indirect
-	github.com/projectdiscovery/retryabledns v1.0.116 // indirect
 	github.com/projectdiscovery/retryablehttp-go v1.3.29 // indirect
 	github.com/projectdiscovery/tlsx v1.4.0 // indirect
 	github.com/projectdiscovery/useragent v0.0.109 // indirect
-	github.com/projectdiscovery/utils v0.11.6 // indirect
 	github.com/projectdiscovery/wappalyzergo v0.2.96 // indirect
 	github.com/refraction-networking/utls v1.8.2 // indirect
 	github.com/remyoudompheng/bigfft v0.0.0-20230129092748-24d4a6f8daec // indirect
@@ -154,13 +156,11 @@ require (
 	go.uber.org/multierr v1.11.0 // indirect
 	golang.org/x/crypto v0.57.0 // indirect
 	golang.org/x/exp v0.0.0-20260112195511-716be5621a96 // indirect
-	golang.org/x/net v0.59.0 // indirect
 	golang.org/x/oauth2 v0.36.0 // indirect
 	golang.org/x/sync v0.24.0 // indirect
 	golang.org/x/sys v0.49.0 // indirect
 	golang.org/x/term v0.46.0 // indirect
 	golang.org/x/text v0.42.0 // indirect
-	golang.org/x/time v0.15.0 // indirect
 	gopkg.in/ini.v1 v1.67.0 // indirect
 	gopkg.in/yaml.v3 v3.0.1 // indirect
 	modernc.org/libc v1.79.0 // indirect

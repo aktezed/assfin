@@ -72,11 +72,11 @@ func Probe(ctx context.Context, hosts []string, o ProbeOpts, onResult func(host 
 		DisableStdout:      true,
 		DisableUpdateCheck: true,
 		OnResult: func(r httpx.Result) {
+			if ctx.Err() != nil {
+				return
+			}
 			if o.OnProgress != nil {
-				done := int(completed.Add(1))
-				if done > total {
-					done = total
-				}
+				done := min(int(completed.Add(1)), total)
 				o.OnProgress(done, total)
 			}
 			if r.Err != nil || r.Failed {
@@ -133,7 +133,7 @@ func Probe(ctx context.Context, hosts []string, o ProbeOpts, onResult func(host 
 							refSources = make(map[string]string)
 						}
 						if _, exists := refSources[h]; !exists {
-							refSources[h] = clipRunes("location: "+r.Location, 120)
+							refSources[h] = types.ClipRunes("location: "+r.Location, 120)
 							referenced = append(referenced, h)
 						}
 					}
@@ -164,9 +164,12 @@ func Probe(ctx context.Context, hosts []string, o ProbeOpts, onResult func(host 
 	if err != nil {
 		return fmt.Errorf("httpx: %w", err)
 	}
-	defer r.Close()
 	done := make(chan struct{})
-	go func() { r.RunEnumeration(); close(done) }()
+	go func() {
+		defer close(done)
+		defer r.Close()
+		r.RunEnumeration()
+	}()
 	select {
 	case <-done:
 		return nil

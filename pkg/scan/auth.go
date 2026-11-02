@@ -12,6 +12,8 @@ import (
 	"time"
 
 	"github.com/aktezed/assfin/pkg/types"
+	"golang.org/x/net/publicsuffix"
+	"golang.org/x/time/rate"
 )
 
 var (
@@ -122,14 +124,16 @@ var (
 	jsonLinkRegex = regexp.MustCompile(`(?i)["'](/[a-zA-Z0-9_\-\/]*(?:register|sign[\s_-]*up|daftar|registrasi|login|sign[\s_-]*in|masuk)[a-zA-Z0-9_\-\/]*)["']`)
 
 	// Negative filter for Indonesian words where 'daftar' means catalog/list, not account registration.
-	nonAuthDaftarRegex = regexp.MustCompile(`(?i)daftar[-_\s]*(artikel|berita|buku|harga|menu|isi|produk|layanan|kegiatan|pengumuman|alumni|pegawai|dosen|mahasiswa|siswa|kontak|pustaka|arsip|wisata|fasilitas|unduhan|download|transaksi|peserta|nilai|tabel|kategori|file|post|item|faq|tanya|outlet|cabang|mitra|inventaris|pemilih|prestasi|guru|sekolah|jadwal|informasi|galeri|video|dokumen|publikasi|lowongan|agenda)`)
-	soft404Regex       = regexp.MustCompile(`(?i)(<title>[^<]*(?:404|not found|page not found|halaman tidak ditemukan|tidak ditemukan)[^<]*</title>|<h1>[^<]*(?:404|not found|page not found|halaman tidak ditemukan)[^<]*</h1>)`)
-	regDisabledRegex   = regexp.MustCompile(`(?i)(registration\s+is\s+(?:closed|disabled|not\s+allowed)|user\s+registration\s+is\s+currently\s+not\s+allowed|pendaftaran\s+(?:ditutup|tidak\s+diizinkan|dinonaktifkan))`)
+	nonAuthDaftarRegex   = regexp.MustCompile(`(?i)daftar[-_\s]*(artikel|berita|buku|harga|menu|isi|produk|layanan|kegiatan|pengumuman|alumni|pegawai|dosen|mahasiswa|siswa|kontak|pustaka|arsip|wisata|fasilitas|unduhan|download|transaksi|peserta|nilai|tabel|kategori|file|post|item|faq|tanya|outlet|cabang|mitra|inventaris|pemilih|prestasi|guru|sekolah|jadwal|informasi|galeri|video|dokumen|publikasi|lowongan|agenda)`)
+	validAuthSuffixRegex = regexp.MustCompile(`(?i)daftar[-_](akun|baru|online|member|pengguna|user|sekarang|registrasi)`)
+	soft404Regex         = regexp.MustCompile(`(?i)(<title>[^<]*(?:404|not found|page not found|halaman tidak ditemukan|tidak ditemukan)[^<]*</title>|<h1>[^<]*(?:404|not found|page not found|halaman tidak ditemukan)[^<]*</h1>)`)
+	regDisabledRegex     = regexp.MustCompile(`(?i)(registration\s+is\s+(?:closed|disabled|not\s+allowed)|user\s+registration\s+is\s+currently\s+not\s+allowed|pendaftaran\s+(?:ditutup|tidak\s+diizinkan|dinonaktifkan))`)
 )
 
 // AuthClassifier handles asset classification into register, login_only, or landing.
 type AuthClassifier struct {
-	client *http.Client
+	client  *http.Client
+	limiter *rate.Limiter
 }
 
 // NewAuthClassifier creates a configured AuthClassifier.
@@ -166,15 +170,27 @@ func NewAuthClassifierWithClient(client *http.Client) *AuthClassifier {
 
 // Classify determines whether a target asset allows registration, is login-only, or is a landing page.
 func (c *AuthClassifier) Classify(ctx context.Context, rawURL string) (authType string, authURL string) {
+	return c.ClassifyWithRoot(ctx, rawURL, "")
+}
+
+// ClassifyWithRoot classifies rawURL while restricting followed auth links and redirects to baseHost or root.
+func (c *AuthClassifier) ClassifyWithRoot(ctx context.Context, rawURL, root string) (authType string, authURL string) {
 	if rawURL == "" {
 		return "", ""
 	}
 
 	parsed, err := url.Parse(rawURL)
-	if err != nil {
+	if err != nil || parsed.Host == "" {
 		return "landing", rawURL
 	}
 	baseURL := parsed.Scheme + "://" + parsed.Host
+	baseHost := Normalize(parsed.Hostname())
+	scopeRoot := Normalize(root)
+	if scopeRoot == "" && baseHost != "" {
+		if etld1, err := publicsuffix.EffectiveTLDPlusOne(baseHost); err == nil && etld1 != "" {
+			scopeRoot = Normalize(etld1)
+		}
+	}
 
 	// Detect wildcard SPA once
 	isWildcard, wildcardLen := c.checkWildcard(ctx, baseURL)
@@ -182,18 +198,17 @@ func (c *AuthClassifier) Classify(ctx context.Context, rawURL string) (authType 
 	// Step 1: Base page inspection
 	baseResp, baseBody, err := c.fetch(ctx, rawURL)
 	if err != nil {
-		// fallback to unknown if connection failed
 		return "unknown", rawURL
 	}
 
-	hasRegLink, regLinkCandidate := extractLink(baseBody, baseURL, registerRegex)
-	hasLoginLink, loginLinkCandidate := extractLink(baseBody, baseURL, loginRegex)
+	hasRegLink, regLinkCandidate := extractLink(baseBody, baseURL, baseHost, scopeRoot, registerRegex)
+	hasLoginLink, loginLinkCandidate := extractLink(baseBody, baseURL, baseHost, scopeRoot, loginRegex)
 	hasPassword := passwordRegex.MatchString(baseBody)
 	hasForm := formRegex.MatchString(baseBody)
 
 	// If root directly has a registration link, verify it is alive (not a 404 or dead link)
 	if hasRegLink {
-		if ok, verifiedReg := c.verifyRegisterEndpoint(ctx, regLinkCandidate, isWildcard, wildcardLen); ok {
+		if ok, verifiedReg, _ := c.verifyRegisterEndpoint(ctx, regLinkCandidate, baseHost, scopeRoot, isWildcard, wildcardLen); ok {
 			return "register", verifiedReg
 		}
 	}
@@ -207,10 +222,10 @@ func (c *AuthClassifier) Classify(ctx context.Context, rawURL string) (authType 
 	// Real-world flow: Most sites put "Don't have an account? Register / Daftar" INSIDE the login page.
 	var loginLink string
 	if hasLoginLink {
-		if ok, verifiedLogin, loginBody := c.verifyLoginEndpoint(ctx, loginLinkCandidate, isWildcard, wildcardLen); ok {
+		if ok, verifiedLogin, loginBody, _ := c.verifyLoginEndpoint(ctx, loginLinkCandidate, baseHost, scopeRoot, isWildcard, wildcardLen); ok {
 			loginLink = verifiedLogin
-			if hasReg, regFromLogin := extractLink(loginBody, baseURL, registerRegex); hasReg {
-				if regOk, verifiedReg := c.verifyRegisterEndpoint(ctx, regFromLogin, isWildcard, wildcardLen); regOk {
+			if hasReg, regFromLogin := extractLink(loginBody, baseURL, baseHost, scopeRoot, registerRegex); hasReg {
+				if regOk, verifiedReg, _ := c.verifyRegisterEndpoint(ctx, regFromLogin, baseHost, scopeRoot, isWildcard, wildcardLen); regOk {
 					return "register", verifiedReg
 				}
 			}
@@ -222,8 +237,8 @@ func (c *AuthClassifier) Classify(ctx context.Context, rawURL string) (authType 
 
 	// Base page is a login page with password field
 	if hasPassword && (loginRegex.MatchString(baseBody) || hasForm) {
-		if hasReg, regFromLogin := extractLink(baseBody, baseURL, registerRegex); hasReg {
-			if regOk, verifiedReg := c.verifyRegisterEndpoint(ctx, regFromLogin, isWildcard, wildcardLen); regOk {
+		if hasReg, regFromLogin := extractLink(baseBody, baseURL, baseHost, scopeRoot, registerRegex); hasReg {
+			if regOk, verifiedReg, _ := c.verifyRegisterEndpoint(ctx, regFromLogin, baseHost, scopeRoot, isWildcard, wildcardLen); regOk {
 				return "register", verifiedReg
 			}
 		}
@@ -233,26 +248,53 @@ func (c *AuthClassifier) Classify(ctx context.Context, rawURL string) (authType 
 	}
 
 	// Step 3: Check candidate registration endpoints directly
-	// (CMS, frameworks, Indonesian, international)
+	// Bail out if ctx cancels or the remote host drops 3 consecutive TCP/TLS requests.
+	const maxConsecutiveTransportErrs = 3
+	consecutiveTransportErrs := 0
 	for _, path := range registerPaths {
+		if ctx.Err() != nil {
+			return "unknown", rawURL
+		}
 		candidateURL := baseURL + path
-		if ok, verifiedReg := c.verifyRegisterEndpoint(ctx, candidateURL, isWildcard, wildcardLen); ok {
+		ok, verifiedReg, netErr := c.verifyRegisterEndpoint(ctx, candidateURL, baseHost, scopeRoot, isWildcard, wildcardLen)
+		if ok {
 			return "register", verifiedReg
+		}
+		if netErr {
+			consecutiveTransportErrs++
+			if consecutiveTransportErrs >= maxConsecutiveTransportErrs {
+				break
+			}
+		} else {
+			consecutiveTransportErrs = 0
 		}
 	}
 
 	// Step 4: Check candidate login endpoints directly
-	// (And inspect if the login page itself contains a live registration link!)
-	for _, path := range loginPaths {
-		candidateURL := baseURL + path
-		if ok, verifiedLogin, loginBody := c.verifyLoginEndpoint(ctx, candidateURL, isWildcard, wildcardLen); ok {
-			if hasReg, regFromLogin := extractLink(loginBody, baseURL, registerRegex); hasReg {
-				if regOk, verifiedReg := c.verifyRegisterEndpoint(ctx, regFromLogin, isWildcard, wildcardLen); regOk {
-					return "register", verifiedReg
+	if consecutiveTransportErrs < maxConsecutiveTransportErrs {
+		for _, path := range loginPaths {
+			if ctx.Err() != nil {
+				return "unknown", rawURL
+			}
+			candidateURL := baseURL + path
+			ok, verifiedLogin, loginBody, netErr := c.verifyLoginEndpoint(ctx, candidateURL, baseHost, scopeRoot, isWildcard, wildcardLen)
+			if ok {
+				if hasReg, regFromLogin := extractLink(loginBody, baseURL, baseHost, scopeRoot, registerRegex); hasReg {
+					if regOk, verifiedReg, _ := c.verifyRegisterEndpoint(ctx, regFromLogin, baseHost, scopeRoot, isWildcard, wildcardLen); regOk {
+						return "register", verifiedReg
+					}
+				}
+				if loginLink == "" {
+					loginLink = verifiedLogin
 				}
 			}
-			if loginLink == "" {
-				loginLink = verifiedLogin
+			if netErr {
+				consecutiveTransportErrs++
+				if consecutiveTransportErrs >= maxConsecutiveTransportErrs {
+					break
+				}
+			} else {
+				consecutiveTransportErrs = 0
 			}
 		}
 	}
@@ -270,34 +312,34 @@ func (c *AuthClassifier) Classify(ctx context.Context, rawURL string) (authType 
 	return "unknown", rawURL
 }
 
-func (c *AuthClassifier) verifyRegisterEndpoint(ctx context.Context, targetURL string, isWildcard bool, wildcardLen int) (bool, string) {
-	if isNonAuthHref(targetURL) {
-		return false, ""
+func (c *AuthClassifier) verifyRegisterEndpoint(ctx context.Context, targetURL, baseHost, scopeRoot string, isWildcard bool, wildcardLen int) (bool, string, bool) {
+	if isNonAuthHref(targetURL) || !isAuthURLInScope(targetURL, baseHost, scopeRoot) {
+		return false, "", false
 	}
 
 	resp, body, err := c.fetch(ctx, targetURL)
 	if err != nil || resp == nil {
-		return false, ""
+		return false, "", err != nil
 	}
 
 	// Must be HTTP 200 OK or 30x redirect
 	if resp.StatusCode < 200 || resp.StatusCode >= 400 {
-		return false, ""
+		return false, "", false
 	}
 
 	// Reject soft-404 pages
 	if soft404Regex.MatchString(body) {
-		return false, ""
+		return false, "", false
 	}
 
 	// Reject if registration is explicitly closed/disabled (e.g. WordPress, Joomla, forums)
 	if regDisabledRegex.MatchString(body) {
-		return false, ""
+		return false, "", false
 	}
 
 	// Reject wildcard SPA match unless there's a password field
 	if isWildcard && abs(len(body)-wildcardLen) < 64 && !passwordRegex.MatchString(body) {
-		return false, ""
+		return false, "", false
 	}
 
 	finalURL := targetURL
@@ -305,8 +347,8 @@ func (c *AuthClassifier) verifyRegisterEndpoint(ctx context.Context, targetURL s
 		finalURL = resp.Request.URL.String()
 	}
 
-	if isNonAuthHref(finalURL) || soft404Regex.MatchString(finalURL) {
-		return false, ""
+	if !isAuthURLInScope(finalURL, baseHost, scopeRoot) || isNonAuthHref(finalURL) || soft404Regex.MatchString(finalURL) {
+		return false, "", false
 	}
 
 	lowerPath := ""
@@ -332,37 +374,40 @@ func (c *AuthClassifier) verifyRegisterEndpoint(ctx context.Context, targetURL s
 		(strings.Contains(targetLower, "daftar") && !isNonAuthHref(targetLower))
 
 	if hasPassword || (hasForm && hasRegContent) || pathHasReg || targetHasReg {
-		return true, finalURL
+		return true, finalURL, false
 	}
 
-	return false, ""
+	return false, "", false
 }
 
-func (c *AuthClassifier) verifyLoginEndpoint(ctx context.Context, targetURL string, isWildcard bool, wildcardLen int) (bool, string, string) {
-	if isNonAuthHref(targetURL) {
-		return false, "", ""
+func (c *AuthClassifier) verifyLoginEndpoint(ctx context.Context, targetURL, baseHost, scopeRoot string, isWildcard bool, wildcardLen int) (bool, string, string, bool) {
+	if isNonAuthHref(targetURL) || !isAuthURLInScope(targetURL, baseHost, scopeRoot) {
+		return false, "", "", false
 	}
 
 	resp, body, err := c.fetch(ctx, targetURL)
 	if err != nil || resp == nil {
-		return false, "", ""
+		return false, "", "", err != nil
 	}
 
 	if resp.StatusCode < 200 || resp.StatusCode >= 400 {
-		return false, "", ""
+		return false, "", "", false
 	}
 
 	if soft404Regex.MatchString(body) {
-		return false, "", ""
+		return false, "", "", false
 	}
 
 	if isWildcard && abs(len(body)-wildcardLen) < 64 && !passwordRegex.MatchString(body) {
-		return false, "", ""
+		return false, "", "", false
 	}
 
 	finalURL := targetURL
 	if resp.Request != nil && resp.Request.URL != nil {
 		finalURL = resp.Request.URL.String()
+	}
+	if !isAuthURLInScope(finalURL, baseHost, scopeRoot) {
+		return false, "", "", false
 	}
 
 	hasPassword := passwordRegex.MatchString(body)
@@ -384,13 +429,22 @@ func (c *AuthClassifier) verifyLoginEndpoint(ctx context.Context, targetURL stri
 		strings.Contains(targetLower, "masuk")
 
 	if hasPassword || (formRegex.MatchString(body) && hasLoginContent) || pathHasLogin || targetHasLogin {
-		return true, finalURL, body
+		return true, finalURL, body, false
 	}
 
-	return false, "", ""
+	return false, "", "", false
 }
 
 func (c *AuthClassifier) fetch(ctx context.Context, target string) (*http.Response, string, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, "", err
+	}
+	if c.limiter != nil {
+		if err := c.limiter.Wait(ctx); err != nil {
+			return nil, "", err
+		}
+	}
+
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, target, nil)
 	if err != nil {
 		return nil, "", err
@@ -420,7 +474,7 @@ func (c *AuthClassifier) checkWildcard(ctx context.Context, baseURL string) (boo
 	return false, 0
 }
 
-func extractLink(html, baseURL string, targetPattern *regexp.Regexp) (bool, string) {
+func extractLink(html, baseURL, baseHost, scopeRoot string, targetPattern *regexp.Regexp) (bool, string) {
 	// 1. Check anchor tags with inner text (e.g. <a href="...">Daftar</button></a>)
 	anchorMatches := anchorRegex.FindAllStringSubmatch(html, -1)
 	for _, m := range anchorMatches {
@@ -431,7 +485,9 @@ func extractLink(html, baseURL string, targetPattern *regexp.Regexp) (bool, stri
 				continue
 			}
 			if (targetPattern.MatchString(href) || targetPattern.MatchString(innerText)) && isValidAuthLink(href) {
-				return true, resolveURL(baseURL, href)
+				if resolved := resolveURL(baseURL, href); isAuthURLInScope(resolved, baseHost, scopeRoot) {
+					return true, resolved
+				}
 			}
 		}
 	}
@@ -445,7 +501,9 @@ func extractLink(html, baseURL string, targetPattern *regexp.Regexp) (bool, stri
 				continue
 			}
 			if targetPattern.MatchString(href) && isValidAuthLink(href) {
-				return true, resolveURL(baseURL, href)
+				if resolved := resolveURL(baseURL, href); isAuthURLInScope(resolved, baseHost, scopeRoot) {
+					return true, resolved
+				}
 			}
 		}
 	}
@@ -459,7 +517,9 @@ func extractLink(html, baseURL string, targetPattern *regexp.Regexp) (bool, stri
 				continue
 			}
 			if targetPattern.MatchString(action) && isValidAuthLink(action) {
-				return true, resolveURL(baseURL, action)
+				if resolved := resolveURL(baseURL, action); isAuthURLInScope(resolved, baseHost, scopeRoot) {
+					return true, resolved
+				}
 			}
 		}
 	}
@@ -473,12 +533,29 @@ func extractLink(html, baseURL string, targetPattern *regexp.Regexp) (bool, stri
 				continue
 			}
 			if targetPattern.MatchString(path) && isValidAuthLink(path) {
-				return true, resolveURL(baseURL, path)
+				if resolved := resolveURL(baseURL, path); isAuthURLInScope(resolved, baseHost, scopeRoot) {
+					return true, resolved
+				}
 			}
 		}
 	}
 
 	return false, ""
+}
+
+func isAuthURLInScope(candidateURL, baseHost, scopeRoot string) bool {
+	u, err := url.Parse(candidateURL)
+	if err != nil || (u.Scheme != "http" && u.Scheme != "https") {
+		return false
+	}
+	candHost := Normalize(u.Hostname())
+	if candHost == "" {
+		return false
+	}
+	if candHost == baseHost {
+		return true
+	}
+	return scopeRoot != "" && (candHost == scopeRoot || strings.HasSuffix(candHost, "."+scopeRoot))
 }
 
 func isNonAuthHref(href string) bool {
@@ -489,12 +566,8 @@ func isNonAuthHref(href string) bool {
 	if nonAuthDaftarRegex.MatchString(lower) {
 		return true
 	}
-	// If path or query segment has daftar-xxx, check if it's not a known auth suffix
-	if strings.Contains(lower, "daftar-") || strings.Contains(lower, "daftar_") {
-		validAuthSuffix := regexp.MustCompile(`(?i)daftar[-_](akun|baru|online|member|pengguna|user|sekarang|registrasi)`)
-		if !validAuthSuffix.MatchString(lower) {
-			return true
-		}
+	if (strings.Contains(lower, "daftar-") || strings.Contains(lower, "daftar_")) && !validAuthSuffixRegex.MatchString(lower) {
+		return true
 	}
 	return false
 }
@@ -537,8 +610,8 @@ func abs(x int) int {
 	return x
 }
 
-// ClassifyAliveHosts runs concurrent classification on a slice of alive hosts.
-func ClassifyAliveHosts(ctx context.Context, hosts []types.Host, threads int, timeoutSec int, onResult func(host string, authType, authURL string)) {
+// ClassifyAliveHosts runs concurrent rate-limited classification on a slice of alive hosts.
+func ClassifyAliveHosts(ctx context.Context, hosts []types.Host, threads, timeoutSec, rateLimit int, onResult func(host string, authType, authURL string)) {
 	if len(hosts) == 0 {
 		return
 	}
@@ -550,32 +623,40 @@ func ClassifyAliveHosts(ctx context.Context, hosts []types.Host, threads int, ti
 	}
 
 	classifier := NewAuthClassifier(time.Duration(timeoutSec) * time.Second)
+	if rateLimit > 0 {
+		classifier.limiter = rate.NewLimiter(rate.Limit(rateLimit), max(rateLimit, threads))
+	}
 
 	jobs := make(chan types.Host, len(hosts))
+	var queued int
 	for _, h := range hosts {
 		if h.Alive && h.URL != "" {
 			jobs <- h
+			queued++
 		}
 	}
 	close(jobs)
+	if queued == 0 {
+		return
+	}
 
+	workers := min(threads, queued)
 	var wg sync.WaitGroup
-	for i := 0; i < threads; i++ {
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
+	for range workers {
+		wg.Go(func() {
 			for h := range jobs {
-				select {
-				case <-ctx.Done():
+				if ctx.Err() != nil {
 					return
-				default:
-					aType, aURL := classifier.Classify(ctx, h.URL)
-					if onResult != nil {
-						onResult(h.Host, aType, aURL)
-					}
+				}
+				aType, aURL := classifier.ClassifyWithRoot(ctx, h.URL, h.Root)
+				if ctx.Err() != nil {
+					return
+				}
+				if onResult != nil {
+					onResult(h.Host, aType, aURL)
 				}
 			}
-		}()
+		})
 	}
 	wg.Wait()
 }

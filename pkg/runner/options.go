@@ -17,20 +17,17 @@ func ParseOptions() *types.Options {
 	flagSet := goflags.NewFlagSet()
 	flagSet.SetDescription("assfin - recursive passive subdomain recon & asset intelligence")
 
-	// Ensure config directory is writable (fallback to local workspace file in restricted/sandbox environments)
-	configDir, err := os.UserConfigDir()
-	configPath := ".assfin-config.yaml"
-	if err == nil {
+	// Bind persistent config file only when the OS user config directory is writable.
+	if configDir, err := os.UserConfigDir(); err == nil {
 		appDir := filepath.Join(configDir, "assfin")
 		if err := os.MkdirAll(appDir, 0o755); err == nil {
 			targetConfig := filepath.Join(appDir, "config.yaml")
 			if f, err := os.OpenFile(targetConfig, os.O_RDWR|os.O_CREATE, 0o644); err == nil {
 				_ = f.Close()
-				configPath = targetConfig
+				flagSet.SetConfigFilePath(targetConfig)
 			}
 		}
 	}
-	flagSet.SetConfigFilePath(configPath)
 
 	args := os.Args[1:]
 	if len(args) > 0 {
@@ -76,6 +73,16 @@ func ParseOptions() *types.Options {
 		flagSet.StringVarP(&opts.ProviderConfig, "provider-config", "pc", "", "subfinder provider-config.yaml"),
 	)
 
+	// DNSX Resolution
+	flagSet.CreateGroup("dnsx", "DNS RESOLUTION",
+		flagSet.BoolVar(&opts.NoDNS, "no-dns", false, "skip dnsx resolution and wildcard filtering"),
+		flagSet.BoolVar(&opts.NoWildcard, "no-wildcard", false, "disable automated wildcard DNS filtering"),
+		flagSet.IntVar(&opts.DNSThreads, "dns-threads", 100, "dnsx concurrent resolution threads"),
+		flagSet.IntVar(&opts.DNSRate, "dns-rate", 500, "dnsx max DNS queries per second"),
+		flagSet.IntVar(&opts.DNSTimeout, "dns-timeout", 3, "dnsx per-query timeout in seconds"),
+		flagSet.StringVarP(&opts.Resolvers, "resolvers", "r", "", "custom DNS resolvers (comma-separated or file path)"),
+	)
+
 	// HTTPX Probing
 	flagSet.CreateGroup("httpx", "PROBING & CLASSIFICATION",
 		flagSet.IntVar(&opts.RateLimit, "rate", 30, "httpx max requests per second"),
@@ -102,6 +109,10 @@ func ParseOptions() *types.Options {
 		flagSet.StringVar(&opts.WAFName, "waf-name", "", "WAF name contains, e.g. cloudflare"),
 		flagSet.BoolVar(&opts.Alive, "alive", false, "only hosts that answered HTTP(S)"),
 		flagSet.BoolVar(&opts.Dead, "dead", false, "only hosts that did not answer"),
+		flagSet.BoolVar(&opts.Resolved, "resolved", false, "only hosts that resolved to an IP in DNS"),
+		flagSet.BoolVar(&opts.HasCNAME, "has-cname", false, "only hosts with a CNAME record"),
+		flagSet.StringSliceVar(&opts.CNAMETarget, "cname", nil, "CNAME target contains (comma-separated for OR)", goflags.CommaSeparatedStringSliceOptions),
+		flagSet.BoolVar(&opts.Dangling, "dangling", false, "only hosts with a dangling CNAME (unresolved target)"),
 		flagSet.StringVar(&opts.Status, "status", "", "status codes, e.g. 200,403"),
 		flagSet.BoolVar(&opts.NewOnly, "new", false, "only hosts first seen in the latest scan"),
 		flagSet.IntVar(&opts.FilterDepth, "filter-depth", -1, "label depth: 1 = x.root, 2 = y.x.root"),
@@ -114,7 +125,7 @@ func ParseOptions() *types.Options {
 	flagSet.CreateGroup("report", "REPORT & SERVER",
 		flagSet.BoolVar(&opts.Report, "report", false, "generate HTML report from database (or after scan)"),
 		flagSet.StringVar(&opts.ReportOutput, "out", "", "HTML report output path (default <target>-report.html)"),
-		flagSet.StringVar(&opts.Serve, "serve", "", "start headless dashboard web server on address/port (e.g. :8080 or 8080)"),
+		flagSet.StringVar(&opts.Serve, "serve", "", "start headless dashboard web server on address/port (default 127.0.0.1:8080, use 0.0.0.0:8080 for LAN/WAN)"),
 		flagSet.IntVarP(&opts.Port, "port", "p", 8080, "port for dashboard web server"),
 	)
 
@@ -148,9 +159,27 @@ func ParseOptions() *types.Options {
 	return opts
 }
 
+func hasQuerySubFilters(o *types.Options) bool {
+	return len(o.Names) > 0 ||
+		len(o.Tech) > 0 ||
+		o.AuthType != "" ||
+		o.Status != "" ||
+		o.HasWAF ||
+		o.NoWAF ||
+		o.WAFName != "" ||
+		o.Alive ||
+		o.Dead ||
+		o.Resolved ||
+		o.HasCNAME ||
+		len(o.CNAMETarget) > 0 ||
+		o.Dangling ||
+		o.NewOnly
+}
+
 func validateOptions(opts *types.Options) error {
 	// Determine effective command if not set explicitly
 	if opts.Command == "" {
+		hasQueryRoot := opts.Query || opts.Target != "" || opts.FilterRoot != "" || opts.RawSQL != ""
 		switch {
 		case opts.Serve != "":
 			opts.Command = "serve"
@@ -158,7 +187,7 @@ func validateOptions(opts *types.Options) error {
 			opts.Command = "scan"
 		case opts.Report || opts.ReportOutput != "":
 			opts.Command = "report"
-		case opts.Query || opts.Target != "" || opts.AuthType != "" || opts.RawSQL != "" || opts.HasWAF || opts.NoWAF || opts.Alive || opts.Dead || len(opts.Names) > 0 || len(opts.Tech) > 0 || opts.Status != "":
+		case hasQueryRoot || hasQuerySubFilters(opts):
 			opts.Command = "query"
 		default:
 			return errors.New("no command or targets specified (use -d, -dL, -q, -report, or serve)")
@@ -193,6 +222,18 @@ func validateOptions(opts *types.Options) error {
 
 	if opts.ContentAssets < 0 {
 		return errors.New("-content-assets cannot be negative")
+	}
+
+	if opts.DNSThreads < 0 {
+		return errors.New("-dns-threads cannot be negative")
+	}
+
+	if opts.DNSRate < 0 {
+		return errors.New("-dns-rate cannot be negative")
+	}
+
+	if opts.DNSTimeout < 0 {
+		return errors.New("-dns-timeout cannot be negative")
 	}
 
 	return nil

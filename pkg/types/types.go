@@ -21,11 +21,22 @@ type Host struct {
 	Server    string   `json:"server"`
 	Tech      []string `json:"tech"`
 	IPs       string   `json:"ips"`
+	CNAME     string   `json:"cname"`
 	CDN       string   `json:"cdn"`
 	WAF       string   `json:"waf"`
 	Length    int      `json:"length"`
 	AuthType  string   `json:"auth_type"`
 	AuthURL   string   `json:"auth_url"`
+}
+
+// DNSResult holds the DNS lookup and wildcard verdict for a host.
+type DNSResult struct {
+	IPs      string
+	CNAME    string
+	CDN      string
+	WAF      string
+	Resolved bool
+	Wildcard bool
 }
 
 // Probe is the subset of an httpx result stored per host.
@@ -57,17 +68,20 @@ type HostRef struct {
 
 // Filter maps query flags to SQL conditions.
 type Filter struct {
-	Names    []string // substring match, OR'ed
-	Tech     []string // per-item match, OR'ed
-	WAF      string   // "", "yes", "no"
-	WAFName  string
-	Alive    string // "", "yes", "no"
-	Status   []int
-	New      bool
-	Depth    int // -1 = any
-	Root     string
-	AuthType string // "", "register", "login_only", "landing"
-	Target   string // target domain
+	Names       []string // substring match, OR'ed
+	Tech        []string // per-item match, OR'ed
+	WAF         string   // "", "yes", "no"
+	WAFName     string
+	Alive       string // "", "yes", "no"
+	Status      []int
+	New         bool
+	Depth       int // -1 = any
+	Root        string
+	AuthType    string   // "", "register", "login_only", "landing"
+	HasCNAME    bool     // cname <> ''
+	CNAMETarget []string // substring match on cname, OR'ed
+	Dangling    bool     // cname <> '' AND ips = ''
+	Resolved    string   // "", "yes", "no"
 }
 
 // RootInfo represents summary information of a scanned root domain.
@@ -106,4 +120,16 @@ func FormatDuration(d time.Duration) string {
 	default:
 		return fmt.Sprintf("%ds", s)
 	}
+}
+
+// ClipRunes truncates s to at most limit runes, appending an ellipsis when truncated.
+func ClipRunes(s string, limit int) string {
+	if limit <= 0 {
+		return ""
+	}
+	r := []rune(s)
+	if len(r) <= limit {
+		return s
+	}
+	return string(r[:limit-1]) + "…"
 }

@@ -21,14 +21,14 @@
   <a href="#usage">Usage</a> •
   <a href="#running-assfin">Running assfin</a> •
   <a href="#querying-results">Querying Results</a> •
-  <a href="#html-reports">HTML Reports</a> •
+  <a href="#reports--headless-vps-dashboard">HTML Reports</a> •
   <a href="#library-usage">Library Usage</a> •
   <a href="#how-it-works">How It Works</a>
 </p>
 
 ---
 
-**assfin** is a passive reconnaissance and asset intelligence tool that automates recursive subdomain discovery and HTTP service probing in a single Go binary. It queries passive sources for a target root domain using [subfinder](https://github.com/projectdiscovery/subfinder), iteratively recurses across every discovered subdomain layer until no new targets emerge, and immediately verifies live services with [httpx](https://github.com/projectdiscovery/httpx).
+**assfin** is a passive reconnaissance and asset intelligence tool that automates recursive subdomain discovery, DNS verification, and HTTP service probing in a single Go binary. It queries passive sources for a target root domain using [subfinder](https://github.com/projectdiscovery/subfinder), recurses across every discovered subdomain layer until no new targets emerge, resolves live DNS records and filters wildcard aliases with [dnsx](https://github.com/projectdiscovery/dnsx), and probes reachable web services with [httpx](https://github.com/projectdiscovery/httpx).
 
 All results are deduplicated and tracked in a persistent SQLite database with historical timeline metadata (`first_seen`, `last_seen`, `new`), which can be queried directly via CLI, piped into downstream tools like [nuclei](https://github.com/projectdiscovery/nuclei), or exported into a standalone offline HTML dashboard.
 
@@ -37,11 +37,12 @@ All results are deduplicated and tracked in a persistent SQLite database with hi
 ## Features
 
 - **Recursive Passive Discovery:** Iteratively enumerates multi-level subdomains by feeding newly uncovered assets back into passive discovery rounds until exhaustion.
-- **WAF-Safe Probing:** Pre-configured with conservative request rates (30 req/s, 25 workers) and no DNS brute-forcing to avoid rate limits or disruption.
+- **DNS Resolution & Wildcard Filtering:** Resolves hosts over UDP with `dnsx` before TCP probing, prunes wildcard DNS aliases (`*.target.com`), records `CNAME` chains and dangling `CNAME` targets, and verifies hostnames extracted from HTML and JavaScript responses before storing or recursing on them.
+- **WAF-Safe Probing & Scoped Role Classification:** Shares conservative request rates (30 req/s, 25 workers) across `httpx` probing and asset role classification (`register`, `login_only`, `landing`), enforcing target domain scope so third-party external links are never probed.
 - **Heuristic WAF Detection:** Detects Cloudflare, Akamai, Imperva, and other WAFs using IP CIDR matching (`cdncheck`) and response headers/cookies without sending attack payloads.
-- **Persistent Asset Database:** Tracks target history across runs in SQLite, automatically identifying newly appeared hosts and marking unreachable endpoints.
+- **Persistent Asset Database:** Tracks target history across runs in SQLite, automatically identifying newly appeared hosts, cross-host content references, and unreachable endpoints.
 - **Pipe-Friendly Architecture:** Supports `table`, `list`, and `json` output streams to integrate cleanly with `nuclei`, `katana`, or custom automation pipelines.
-- **Self-Contained HTML Reports:** Produces portable, single-file offline dashboards with status filters, technology tags, and WAF categorization.
+- **Scoped HTML Reports & Loopback Dashboard:** Exports target-isolated single-file offline HTML workbenches (with DNS/CNAME facets, asset roles, technology tags, and WAF filters) or serves them locally on `127.0.0.1:8080` for SSH port forwarding on headless VPS hosts.
 - **Go Library / SDK:** Clean programmatic API through `pkg/runner` for direct integration into custom Go tools.
 
 ---
@@ -102,6 +103,14 @@ SUBFINDER:
    -sf-concurrency int           subdomains enumerated in parallel (default 5)
    -pc, -provider-config string  subfinder provider-config.yaml
 
+DNS RESOLUTION:
+   -no-dns                 skip dnsx resolution and wildcard filtering
+   -no-wildcard            disable automated wildcard DNS filtering
+   -dns-threads int        dnsx concurrent resolution threads (default 100)
+   -dns-rate int           dnsx max DNS queries per second (default 500)
+   -dns-timeout int        dnsx per-query timeout in seconds (default 3)
+   -r, -resolvers string   custom DNS resolvers (comma-separated or file path)
+
 PROBING & CLASSIFICATION:
    -rate int            httpx max requests per second (default 30)
    -threads int         httpx threads (default 25)
@@ -125,6 +134,10 @@ QUERY / FILTER:
    -waf-name string           WAF name contains, e.g. cloudflare
    -alive                     only hosts that answered HTTP(S)
    -dead                      only hosts that did not answer
+   -resolved                  only hosts that resolved to an IP in DNS
+   -has-cname                 only hosts with a CNAME record
+   -cname string[]            CNAME target contains (comma-separated for OR)
+   -dangling                  only hosts with a dangling CNAME (unresolved target)
    -status string             status codes, e.g. 200,403
    -new                       only hosts first seen in the latest scan
    -filter-depth int          label depth: 1 = x.root, 2 = y.x.root (default -1)
@@ -135,7 +148,7 @@ QUERY / FILTER:
 REPORT & SERVER:
    -report        generate HTML report from database (or after scan)
    -out string    HTML report output path (default <target>-report.html)
-   -serve string  start headless dashboard web server on address/port (e.g. :8080 or 8080)
+   -serve string  start headless dashboard web server on address/port (default 127.0.0.1:8080, use 0.0.0.0:8080 for LAN/WAN)
    -p, -port int  port for dashboard web server (default 8080)
 
 GENERAL:
@@ -183,17 +196,24 @@ assfin scan -d example.com -exclude staging.example.com,internal.example.com
 | `-sf-concurrency` | `5` | Number of subdomains enumerated concurrently |
 | `-sf-timeout` | `15s` | Subfinder per-source timeout |
 | `-sf-max-time` | `2m` | Subfinder total timeout per domain |
-| `-rate` | `30` | Maximum HTTP requests per second for httpx |
-| `-threads` | `25` | Worker thread count for httpx |
+| `-dns-threads` | `100` | Concurrent UDP resolution workers for `dnsx` |
+| `-dns-rate` | `500` | Maximum DNS queries per second for `dnsx` |
+| `-dns-timeout` | `3s` | Per-query DNS timeout |
+| `-no-wildcard` | `false` | Keep wildcard DNS matches instead of pruning them |
+| `-no-dns` | `false` | Skip `dnsx` resolution and wildcard filtering |
+| `-rate` | `30` | Maximum HTTP requests per second shared by `httpx` and asset role classification |
+| `-threads` | `25` | Worker thread count for `httpx` |
 | `-timeout` | `7s` | HTTP request timeout |
 | `-follow` | `false` | Follow HTTP redirects |
-| `-no-probe` | `false` | Passive enumeration only; skips HTTP probing |
+| `-no-probe` | `false` | Skip `httpx` HTTP probing (`subfinder` and `dnsx` still run unless `-no-dns` is also set) |
+| `-no-auth` | `false` | Skip asset role (`register`, `login_only`, `landing`) classification |
+| `-auth-threads` | `10` | Worker thread count for in-scope asset role classification |
 | `-no-content` | `false` | Disable content-derived host discovery from probed HTTP responses |
 | `-content-depth` | `1` | Maximum content-discovery feedback rounds into passive crawl and probing |
 | `-content-assets` | `0` (off) | Maximum same-host `.js`/`.json` assets inspected per probed HTML page |
 
 > [!NOTE]
-> Enumeration uses passive sources only (e.g. crt.sh, VirusTotal, AlienVault) and never queries the target's authoritative DNS servers. The only packets sent to target infrastructure are standard HTTP/HTTPS GET requests from `httpx` governed by `-rate`.
+> Subdomain enumeration queries passive OSINT sources (crt.sh, VirusTotal, AlienVault, and others) without wordlist brute-forcing. `dnsx` then resolves discovered hostnames through public recursive resolvers (or custom `-r` resolvers) to prune `NXDOMAIN` and wildcard hosts before `httpx` sends HTTP/HTTPS GET requests at `-rate`.
 
 ### Passive API Configuration
 
@@ -225,6 +245,14 @@ assfin query -db example.com.db -waf-name cloudflare
 # Filter by asset role: registerable, login_only, or landing
 assfin query -db example.com.db -auth-type register
 
+# Filter hosts with CNAME records or unresolved dangling CNAME targets
+assfin query -db example.com.db -has-cname
+assfin query -db example.com.db -cname s3.amazonaws.com,cloudfront.net
+assfin query -db example.com.db -dangling -o json
+
+# Filter hosts that resolved in DNS (including non-HTTP services)
+assfin query -db example.com.db -resolved
+
 # View formatted terminal dossier for a target (ideal on headless VPS)
 assfin query -db example.com.db -target example.com
 
@@ -243,7 +271,7 @@ assfin query -db example.com.db -sql "SELECT host, title, status, auth_type FROM
 The `hosts` table contains the following fields:
 
 ```text
-host, root, depth, sources, first_seen, last_seen, first_scan, last_scan, alive, url, status, title, server, tech, ips, cdn, waf, length, auth_type, auth_url
+host, root, depth, sources, first_seen, last_seen, first_scan, last_scan, alive, url, status, title, server, tech, ips, cname, cdn, waf, length, auth_type, auth_url
 ```
 
 Cross-host HTTP references are stored in `host_refs`:
@@ -257,37 +285,37 @@ host, referrer, source, first_seen, last_seen
 ## Reports & Headless VPS Dashboard
 
 ### Target-Specific Reports
-Generate a self-contained, offline-compatible HTML dashboard from an existing database. Scans automatically name the report after the target (e.g. `example.com-report.html`):
+Generate a self-contained, offline-compatible HTML dashboard from an existing database. Passing `-target` isolates the exported HTML to that root domain's hosts, scan history, and content references, even when the SQLite file stores multiple targets:
 
 ```bash
-# Output defaults to example.com-report.html
-assfin report -db example.com.db -target example.com
+# Scoped to example.com; output defaults to example.com-report.html
+assfin report -db targets.db -target example.com
 
-# Custom report output path
-assfin report -db example.com.db -out audit.html
+# Export all targets in the database to a custom path
+assfin report -db targets.db -out audit.html
 ```
 
 ### Headless VPS Dashboard Server
-When running on a headless VPS without a desktop browser, start the built-in lightweight web server:
+When running on a headless VPS without a desktop browser, start the built-in web server. By default, `serve` binds `127.0.0.1` so asset inventories are never exposed on public network interfaces unless you explicitly pass `0.0.0.0:8080`:
 
 ```bash
-# Start server on default port 8080
+# Start loopback server on 127.0.0.1:8080 (optionally scoped with -target)
 assfin serve -db example.com.db -port 8080
 
-# Or start server right after scanning
+# Or start loopback server right after scanning
 assfin scan -d example.com -serve 8080
 ```
 
 Access from your local machine using an SSH tunnel:
 ```bash
 ssh -NL 8080:localhost:8080 user@<vps-ip>
-# Then open http://localhost:8080 in your laptop browser!
+# Then open http://localhost:8080 in your laptop browser
 ```
 
 The generated report features:
-- **Visual Breakdown:** Tri-color distribution bar showing reachable without WAF, behind WAF, and unresponsive hosts.
-- **Interactive Filtering:** Instant keyword search, HTTP status code filtering, and technology tag filtering.
-- **Host Details:** Expandable drawer for each host containing resolved IPs, response headers, detected technologies, and titles.
+- **Visual Breakdown:** Distribution bar showing reachable without WAF, behind WAF, and unresponsive hosts alongside elapsed scan telemetry.
+- **DNS, Role & Status Facets:** Instant keyword search plus one-click filtering by DNS state (`Resolved`, `Has CNAME`, `Dangling CNAME`), asset role (`Registerable`, `Login Only`, `Landing`), HTTP status class, WAF status, and technology stack.
+- **Host Details:** Expandable drawer for each host containing resolved IPs, `CNAME` chains, authentication URLs, discovery sources, cross-host content references (`host_refs`), and detected technologies.
 
 ---
 
@@ -346,7 +374,13 @@ func main() {
                      [Deduplication]
                            │
                            ▼
+          [DNSX Resolution & Wildcard Filter]
+                           │
+                           ▼
                [HTTPX WAF-Safe Probing]
+                           │
+                           ▼
+         [Scoped Asset Role Classification]
                            │
                            ▼
                    [SQLite Storage]
@@ -354,8 +388,9 @@ func main() {
 
 1. **Initial Harvest:** `assfin` enumerates the root domain across dozens of passive sources.
 2. **Recursive Expansion:** Any newly identified subdomain is added to the crawl queue and fed back into passive sources. Rounds continue automatically until no new subdomains appear (or `-depth` limit is reached).
-3. **Controlled Probing:** Discovered hosts are probed using `httpx` with WAF-safe concurrency (`-rate 30`).
-4. **State Persistence:** Hosts are written to SQLite, preserving first-seen and last-seen timestamps to track asset changes over time.
+3. **DNS Verification & Wildcard Pruning:** `dnsx` resolves discovered hostnames over UDP, removes wildcard DNS entries from SQLite, stores `CNAME` chains (including dangling `CNAME` records whose targets do not resolve), and passes only IP-resolved hosts forward.
+4. **Controlled Probing & Content Verification:** Resolved hosts are probed with `httpx` (`-rate 30`). Any in-scope subdomains extracted from HTML headers, page bodies, or JavaScript assets pass through `dnsx` before entering SQLite or subsequent crawl and probe rounds.
+5. **Scoped Role Classification & Persistence:** Reachable endpoints are classified into `register`, `login_only`, or `landing` within the `-rate` budget while ignoring third-party domains, and all host records and timestamps are saved to SQLite.
 
 ### Heuristic WAF Detection
 

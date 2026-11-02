@@ -16,14 +16,16 @@ func PrintTargetSummary(w io.Writer, root string, hosts []types.Host) {
 	}
 
 	var (
-		alive        int
-		wafCount     int
-		fresh        int
-		regHosts     []types.Host
-		loginHosts   []types.Host
-		landHosts    []types.Host
-		unreach      []types.Host
-		contentHosts []types.Host
+		alive         int
+		resolvedCount int
+		wafCount      int
+		fresh         int
+		regHosts      []types.Host
+		loginHosts    []types.Host
+		landHosts     []types.Host
+		unreach       []types.Host
+		contentHosts  []types.Host
+		danglingHosts []types.Host
 	)
 
 	for _, h := range hosts {
@@ -41,6 +43,12 @@ func PrintTargetSummary(w io.Writer, root string, hosts []types.Host) {
 			}
 		} else {
 			unreach = append(unreach, h)
+		}
+		if h.IPs != "" {
+			resolvedCount++
+		}
+		if h.CNAME != "" && h.IPs == "" {
+			danglingHosts = append(danglingHosts, h)
 		}
 		if h.WAF != "" {
 			wafCount++
@@ -60,6 +68,7 @@ func PrintTargetSummary(w io.Writer, root string, hosts []types.Host) {
 	fmt.Fprintf(w, "  TARGET DOSSIER : %s\n", strings.ToUpper(root))
 	fmt.Fprintln(w, div)
 	fmt.Fprintf(w, "  Total Discovered Subdomains : %-6d  Alive Web Endpoints : %d\n", len(hosts), alive)
+	fmt.Fprintf(w, "  DNS Resolved Hosts          : %-6d  Dangling CNAMEs     : %d\n", resolvedCount, len(danglingHosts))
 	fmt.Fprintf(w, "  Behind WAF Protection       : %-6d  New In Latest Scan  : %d\n", wafCount, fresh)
 	fmt.Fprintf(w, "  Discovered via Content      : %-6d  (Extended beyond passive CT)\n", len(contentHosts))
 	fmt.Fprintln(w, subDiv)
@@ -98,6 +107,14 @@ func PrintTargetSummary(w io.Writer, root string, hosts []types.Host) {
 				wafLabel = fmt.Sprintf(" [%s]", h.WAF)
 			}
 			fmt.Fprintf(w, "    • %-32s -> %s%s\n", h.Host, targetURL, wafLabel)
+		}
+	}
+
+	if len(danglingHosts) > 0 {
+		fmt.Fprintln(w, subDiv)
+		fmt.Fprintln(w, "  DANGLING CNAME RECORDS (Unresolved CNAME Targets):")
+		for _, h := range danglingHosts {
+			fmt.Fprintf(w, "    • %-32s -> %s [unresolved]\n", h.Host, h.CNAME)
 		}
 	}
 

@@ -6,6 +6,7 @@ import (
 	"html/template"
 	"io"
 	"os"
+	"strings"
 	"time"
 
 	"github.com/aktezed/assfin/pkg/store"
@@ -21,20 +22,38 @@ type templatePayload struct {
 	DataJSON template.JS
 }
 
-// RenderReport queries data from store and renders the HTML report to w.
+// RenderReport queries all data from store and renders the HTML report to w.
 func RenderReport(s *store.Store, w io.Writer) error {
-	hosts, err := s.QueryHosts(types.Filter{Depth: -1})
+	return RenderScopedReport(s, "", w)
+}
+
+// RenderScopedReport queries data from store (optionally scoped to root) and renders the HTML report to w.
+func RenderScopedReport(s *store.Store, root string, w io.Writer) error {
+	root = strings.TrimPrefix(strings.TrimSuffix(strings.ToLower(strings.TrimSpace(root)), "."), "*.")
+
+	hosts, err := s.QueryHosts(types.Filter{Root: root, Depth: -1})
 	if err != nil {
 		return err
 	}
 	if hosts == nil {
 		hosts = []types.Host{}
 	}
-	roots, err := s.GetScansSummary()
+
+	allRoots, err := s.GetScansSummary()
 	if err != nil {
 		return err
 	}
-	refs, err := s.QueryHostRefs("")
+	roots := allRoots
+	if root != "" {
+		roots = make([]types.RootInfo, 0, 1)
+		for _, r := range allRoots {
+			if r.Root == root {
+				roots = append(roots, r)
+			}
+		}
+	}
+
+	refs, err := s.QueryHostRefs(root)
 	if err != nil {
 		return err
 	}
@@ -51,20 +70,23 @@ func RenderReport(s *store.Store, w io.Writer) error {
 		return err
 	}
 
-	payload := templatePayload{
+	return reportTmpl.Execute(w, templatePayload{
 		DataJSON: template.JS(rawJSON),
-	}
-
-	return reportTmpl.Execute(w, payload)
+	})
 }
 
-// WriteReport queries data from store and writes the HTML report to out.
+// WriteReport queries all data from store and writes the HTML report to out.
 func WriteReport(s *store.Store, out string) error {
+	return WriteScopedReport(s, "", out)
+}
+
+// WriteScopedReport queries data from store (optionally scoped to root) and writes the HTML report to out.
+func WriteScopedReport(s *store.Store, root, out string) error {
 	f, err := os.Create(out)
 	if err != nil {
 		return err
 	}
 	defer f.Close()
 
-	return RenderReport(s, f)
+	return RenderScopedReport(s, root, f)
 }

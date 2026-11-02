@@ -5,8 +5,12 @@ import (
 	"context"
 	"io"
 	"net/http"
+	"net/http/httptest"
 	"strings"
+	"sync/atomic"
 	"testing"
+
+	"github.com/aktezed/assfin/pkg/types"
 )
 
 type roundTripFunc func(*http.Request) (*http.Response, error)
@@ -327,5 +331,79 @@ func TestAuthClassifier_DirectRegisterPhp(t *testing.T) {
 	expectedURL := "https://phpapp.example.com/register.php"
 	if authURL != expectedURL {
 		t.Errorf("expected %q, got %q", expectedURL, authURL)
+	}
+}
+
+func TestAuthClassifier_IgnoresExternalThirdPartyAuthLinks(t *testing.T) {
+	var externalHits atomic.Int32
+
+	client := &http.Client{
+		Transport: roundTripFunc(func(req *http.Request) (*http.Response, error) {
+			host := req.URL.Hostname()
+			if host != "blog.example.com" && host != "portal.example.com" && host != "sso.example.com" {
+				externalHits.Add(1)
+				return mockResponse(http.StatusOK, `<html><body><form><input type="password"><button>Sign Up</button></form></body></html>`, req), nil
+			}
+
+			switch {
+			case host == "blog.example.com" && req.URL.Path == "":
+				body := `<html><body><h1>Company Blog</h1>` +
+					`<a href="https://eventbrite.com/register">Register for Webinar</a>` +
+					`<a href="https://github.com/login">Sign in with GitHub</a>` +
+					`</body></html>`
+				return mockResponse(http.StatusOK, body, req), nil
+			case host == "portal.example.com" && req.URL.Path == "":
+				body := `<html><body><h1>Employee Portal</h1><a href="https://sso.example.com/login">SSO Login</a></body></html>`
+				return mockResponse(http.StatusOK, body, req), nil
+			case host == "sso.example.com" && req.URL.Path == "/login":
+				body := `<html><body><form action="/login"><input type="password"><button>Sign In</button></form></body></html>`
+				return mockResponse(http.StatusOK, body, req), nil
+			default:
+				return mockResponse(http.StatusNotFound, "not found", req), nil
+			}
+		}),
+	}
+
+	classifier := NewAuthClassifierWithClient(client)
+
+	authType, _ := classifier.ClassifyWithRoot(context.Background(), "https://blog.example.com", "example.com")
+	if authType != "landing" {
+		t.Errorf("expected blog with external eventbrite/github links to classify as 'landing', got %q", authType)
+	}
+	if got := externalHits.Load(); got != 0 {
+		t.Errorf("expected 0 HTTP requests to external third-party domains, got %d", got)
+	}
+
+	ssoType, ssoURL := classifier.ClassifyWithRoot(context.Background(), "https://portal.example.com", "example.com")
+	if ssoType != "login_only" || ssoURL != "https://sso.example.com/login" {
+		t.Errorf("expected sibling corporate SSO subdomain to be allowed as login_only, got (%q, %q)", ssoType, ssoURL)
+	}
+}
+
+func TestClassifyAliveHosts_RateLimitAndScope(t *testing.T) {
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "", "/":
+			_, _ = io.WriteString(w, `<html><body><a href="/signup">Create Account</a></body></html>`)
+		case "/signup":
+			_, _ = io.WriteString(w, `<html><body><form><input type="password"><button>Sign Up</button></form></body></html>`)
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer ts.Close()
+
+	hosts := []types.Host{
+		{Host: "app.example.test", Root: "example.test", Alive: true, URL: ts.URL},
+	}
+
+	var gotType, gotURL string
+	ClassifyAliveHosts(context.Background(), hosts, 2, 2, 200, func(_ string, authType, authURL string) {
+		gotType = authType
+		gotURL = authURL
+	})
+
+	if gotType != "register" || gotURL != ts.URL+"/signup" {
+		t.Errorf("unexpected ClassifyAliveHosts result: type=%q url=%q", gotType, gotURL)
 	}
 }

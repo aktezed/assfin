@@ -26,6 +26,10 @@ fmt:
 	$(GO) fmt ./...
 	$(GO) vet ./...
 
+## lint: Run golangci-lint
+lint:
+	golangci-lint run ./...
+
 ## install: Install binary to $GOPATH/bin
 install:
 	$(GO) install ./cmd/assfin

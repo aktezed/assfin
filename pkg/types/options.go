@@ -25,6 +25,14 @@ type Options struct {
 	SubfinderConcurrency int
 	ProviderConfig       string
 
+	// DNSX Resolution Configuration
+	NoDNS      bool
+	NoWildcard bool
+	DNSThreads int
+	DNSRate    int
+	DNSTimeout int
+	Resolvers  string
+
 	// HTTPX Probing Configuration
 	RateLimit       int
 	Threads         int
@@ -58,6 +66,10 @@ type Options struct {
 	OutputFormat string
 	AuthType     string
 	Target       string
+	HasCNAME     bool
+	CNAMETarget  goflags.StringSlice
+	Dangling     bool
+	Resolved     bool
 
 	// Reporting & Web Dashboard Server
 	Report       bool

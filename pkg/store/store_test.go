@@ -1,6 +1,7 @@
 package store
 
 import (
+	"database/sql"
 	"path/filepath"
 	"slices"
 	"testing"
@@ -191,5 +192,159 @@ func TestContentHostsAndRefs(t *testing.T) {
 	}
 	if refs[1].Host != "v3.example.gov" || refs[1].Referrer != "v2.example.gov" {
 		t.Errorf("unexpected ref[1]: %+v", refs[1])
+	}
+}
+
+func TestDNSStorageFiltersAndWildcardDelete(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "dns.db")
+	s, err := New(path, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = s.Close() }()
+
+	scanID, err := s.StartScan("example.com", "{}")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, h := range []string{"example.com", "app.example.com", "vpn.example.com", "promo.example.com", "wc1.example.com"} {
+		depth := 1
+		if h == "example.com" {
+			depth = 0
+		}
+		if err := s.UpsertHost(scanID, "example.com", h, depth, []string{"subfinder"}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := s.SaveHostRef("wc1.example.com", "app.example.com", "https://wc1.example.com"); err != nil {
+		t.Fatal(err)
+	}
+
+	// Active CNAME + HTTP response: probe keeps CNAME and updates HTTP fields while preserving DNS IPs if probe leaves IPs empty.
+	if err := s.SaveDNS("app.example.com", types.DNSResult{
+		IPs:      "104.21.1.10",
+		CNAME:    "app.cdn.cloudflare.net",
+		CDN:      "cloudflare",
+		WAF:      "Cloudflare",
+		Resolved: true,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.SaveProbe("app.example.com", types.Probe{
+		URL:    "https://app.example.com",
+		Status: 200,
+		Title:  "App",
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	// Non-HTTP service (e.g. VPN): resolved in DNS, no HTTP SaveProbe call.
+	if err := s.SaveDNS("vpn.example.com", types.DNSResult{
+		IPs:      "203.0.113.44",
+		Resolved: true,
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	// Dangling CNAME: CNAME present, no A/AAAA IPs.
+	if err := s.SaveDNS("promo.example.com", types.DNSResult{
+		CNAME:    "old-promo.s3.amazonaws.com",
+		Resolved: false,
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	// DeleteHosts must remove wc1.example.com (and its host_refs) without deleting root apex example.com.
+	if err := s.DeleteHosts("example.com", []string{"example.com", "wc1.example.com"}); err != nil {
+		t.Fatal(err)
+	}
+
+	all, err := s.QueryHosts(types.Filter{Depth: -1})
+	if err != nil {
+		t.Fatal(err)
+	}
+	byHost := make(map[string]types.Host, len(all))
+	for _, h := range all {
+		byHost[h.Host] = h
+	}
+	if _, exists := byHost["wc1.example.com"]; exists {
+		t.Fatal("expected wildcard host wc1.example.com to be deleted")
+	}
+	if _, exists := byHost["example.com"]; !exists {
+		t.Fatal("root apex example.com must never be deleted by DeleteHosts")
+	}
+	if got := byHost["app.example.com"]; got.CNAME != "app.cdn.cloudflare.net" || got.IPs != "104.21.1.10" || got.WAF != "Cloudflare" || !got.Alive {
+		t.Errorf("app.example.com DNS + probe merge unexpected: %+v", got)
+	}
+	if got := byHost["vpn.example.com"]; got.IPs != "203.0.113.44" || got.Alive {
+		t.Errorf("vpn.example.com non-HTTP DNS state unexpected: %+v", got)
+	}
+
+	refs, err := s.QueryHostRefs("example.com")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(refs) != 0 {
+		t.Errorf("expected host_refs for deleted wildcard host to be removed, got %+v", refs)
+	}
+
+	// Verify DNS query filters.
+	dangling, err := s.QueryHosts(types.Filter{Depth: -1, Dangling: true})
+	if err != nil || len(dangling) != 1 || dangling[0].Host != "promo.example.com" {
+		t.Fatalf("dangling filter got %+v (err=%v)", dangling, err)
+	}
+	cnames, err := s.QueryHosts(types.Filter{Depth: -1, HasCNAME: true})
+	if err != nil || len(cnames) != 2 {
+		t.Fatalf("HasCNAME filter got %+v (err=%v)", cnames, err)
+	}
+	s3Hosts, err := s.QueryHosts(types.Filter{Depth: -1, CNAMETarget: []string{"s3.amazonaws.com"}})
+	if err != nil || len(s3Hosts) != 1 || s3Hosts[0].Host != "promo.example.com" {
+		t.Fatalf("CNAMETarget filter got %+v (err=%v)", s3Hosts, err)
+	}
+	resolved, err := s.QueryHosts(types.Filter{Depth: -1, Resolved: "yes"})
+	if err != nil || len(resolved) != 2 {
+		t.Fatalf("Resolved=yes filter got %+v (err=%v)", resolved, err)
+	}
+}
+
+func TestLegacyReadOnlyDBWithoutCNAMEColumn(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "legacy.db")
+	rawDB, err := sql.Open("sqlite", "file:"+path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = rawDB.Exec(`
+CREATE TABLE scans (id INTEGER PRIMARY KEY, root TEXT, started TEXT, finished TEXT, opts TEXT);
+CREATE TABLE hosts (
+  host TEXT PRIMARY KEY, root TEXT, depth INT, sources TEXT,
+  first_seen TEXT, last_seen TEXT, first_scan INT, last_scan INT,
+  alive INT DEFAULT 0, url TEXT DEFAULT '', status INT DEFAULT 0, title TEXT DEFAULT '',
+  server TEXT DEFAULT '', tech TEXT DEFAULT '', ips TEXT DEFAULT '', cdn TEXT DEFAULT '',
+  waf TEXT DEFAULT '', length INT DEFAULT 0, auth_type TEXT DEFAULT '', auth_url TEXT DEFAULT '');
+INSERT INTO scans(id, root, started, finished, opts) VALUES (1, 'old.com', '2026-01-01T00:00:00Z', '2026-01-01T00:01:00Z', '{}');
+INSERT INTO hosts(host, root, depth, sources, first_seen, last_seen, first_scan, last_scan, alive, status, ips)
+VALUES ('api.old.com', 'old.com', 1, 'crtsh', '2026-01-01T00:00:00Z', '2026-01-01T00:00:00Z', 1, 1, 1, 200, '198.51.100.1');`)
+	if err != nil {
+		_ = rawDB.Close()
+		t.Fatal(err)
+	}
+	_ = rawDB.Close()
+
+	ro, err := New(path, true)
+	if err != nil {
+		t.Fatalf("open legacy read-only DB: %v", err)
+	}
+	defer func() { _ = ro.Close() }()
+
+	hosts, err := ro.QueryHosts(types.Filter{Depth: -1})
+	if err != nil {
+		t.Fatalf("QueryHosts on legacy DB: %v", err)
+	}
+	if len(hosts) != 1 || hosts[0].Host != "api.old.com" || hosts[0].CNAME != "" {
+		t.Fatalf("unexpected legacy hosts: %+v", hosts)
+	}
+	dangling, err := ro.QueryHosts(types.Filter{Depth: -1, Dangling: true})
+	if err != nil || len(dangling) != 0 {
+		t.Fatalf("expected 0 dangling rows on legacy DB, got %+v (err=%v)", dangling, err)
 	}
 }

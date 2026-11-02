@@ -20,7 +20,7 @@ CREATE TABLE IF NOT EXISTS hosts (
   host TEXT PRIMARY KEY, root TEXT, depth INT, sources TEXT,
   first_seen TEXT, last_seen TEXT, first_scan INT, last_scan INT,
   alive INT DEFAULT 0, url TEXT DEFAULT '', status INT DEFAULT 0, title TEXT DEFAULT '',
-  server TEXT DEFAULT '', tech TEXT DEFAULT '', ips TEXT DEFAULT '', cdn TEXT DEFAULT '',
+  server TEXT DEFAULT '', tech TEXT DEFAULT '', ips TEXT DEFAULT '', cname TEXT DEFAULT '', cdn TEXT DEFAULT '',
   waf TEXT DEFAULT '', length INT DEFAULT 0, auth_type TEXT DEFAULT '', auth_url TEXT DEFAULT '');
 CREATE TABLE IF NOT EXISTS host_refs (
   host TEXT NOT NULL, referrer TEXT NOT NULL, source TEXT NOT NULL,
@@ -34,7 +34,11 @@ CREATE INDEX IF NOT EXISTS idx_host_refs_referrer ON host_refs(referrer);`
 
 const hostCols = `host, root, depth, sources, first_seen, last_seen,
   first_scan = (SELECT max(id) FROM scans s WHERE s.root = hosts.root),
-  alive, url, status, title, server, tech, ips, cdn, waf, length, auth_type, auth_url`
+  alive, url, status, title, server, tech, ips, coalesce(cname, ''), cdn, waf, length, auth_type, auth_url`
+
+const hostColsLegacy = `host, root, depth, sources, first_seen, last_seen,
+  first_scan = (SELECT max(id) FROM scans s WHERE s.root = hosts.root),
+  alive, url, status, title, server, tech, ips, '' AS cname, cdn, waf, length, auth_type, auth_url`
 
 // Store handles persistence of scan results and hosts in SQLite.
 type Store struct {
@@ -42,7 +46,9 @@ type Store struct {
 	upsertSt        *sql.Stmt
 	contentUpsertSt *sql.Stmt
 	refSt           *sql.Stmt
+	dnsSt           *sql.Stmt
 	probeSt         *sql.Stmt
+	hasCNAME        bool
 }
 
 // New opens or creates a SQLite database at the specified path.
@@ -62,12 +68,14 @@ func New(path string, readOnly bool) (*Store, error) {
 	st := &Store{db: db}
 	if !readOnly {
 		if _, err := db.Exec(schema); err != nil {
-			db.Close()
+			_ = db.Close()
 			return nil, fmt.Errorf("create schema: %w", err)
 		}
 		// Migrate older databases if columns are missing
 		_, _ = db.Exec(`ALTER TABLE hosts ADD COLUMN auth_type TEXT DEFAULT ''`)
 		_, _ = db.Exec(`ALTER TABLE hosts ADD COLUMN auth_url TEXT DEFAULT ''`)
+		_, _ = db.Exec(`ALTER TABLE hosts ADD COLUMN cname TEXT DEFAULT ''`)
+		st.hasCNAME = true
 
 		// Pre-compile hot-path statements to avoid SQL re-parsing on every host/probe callback.
 		st.upsertSt, err = db.Prepare(`
@@ -77,7 +85,7 @@ ON CONFLICT(host) DO UPDATE SET
   last_seen=excluded.last_seen, last_scan=excluded.last_scan,
   depth=min(hosts.depth, excluded.depth), sources=excluded.sources`)
 		if err != nil {
-			db.Close()
+			_ = db.Close()
 			return nil, fmt.Errorf("prepare upsert: %w", err)
 		}
 		st.contentUpsertSt, err = db.Prepare(`
@@ -88,7 +96,7 @@ ON CONFLICT(host) DO UPDATE SET
   depth=min(hosts.depth, excluded.depth),
   sources=CASE WHEN hosts.sources = '' THEN excluded.sources ELSE hosts.sources END`)
 		if err != nil {
-			st.Close()
+			_ = st.Close()
 			return nil, fmt.Errorf("prepare content upsert: %w", err)
 		}
 		st.refSt, err = db.Prepare(`
@@ -97,18 +105,53 @@ VALUES(?,?,?,?,?)
 ON CONFLICT(host, referrer) DO UPDATE SET
   source=excluded.source, last_seen=excluded.last_seen`)
 		if err != nil {
-			st.Close()
+			_ = st.Close()
 			return nil, fmt.Errorf("prepare host_refs: %w", err)
 		}
-		st.probeSt, err = db.Prepare(`
-UPDATE hosts SET alive=1, url=?, status=?, title=?, server=?, tech=?, ips=?, cdn=?, waf=?, length=?, auth_type=?, auth_url=?
+		st.dnsSt, err = db.Prepare(`
+UPDATE hosts SET ips=?, cname=?, cdn=?, waf=CASE WHEN ? <> '' THEN ? ELSE waf END
 WHERE host=?`)
 		if err != nil {
-			st.Close()
+			_ = st.Close()
+			return nil, fmt.Errorf("prepare dns: %w", err)
+		}
+		st.probeSt, err = db.Prepare(`
+UPDATE hosts SET alive=1, url=?, status=?, title=?, server=?, tech=?,
+  ips=CASE WHEN ? <> '' THEN ? ELSE ips END,
+  cdn=CASE WHEN ? <> '' THEN ? ELSE cdn END,
+  waf=CASE WHEN ? <> '' THEN ? ELSE waf END,
+  length=?, auth_type=?, auth_url=?
+WHERE host=?`)
+		if err != nil {
+			_ = st.Close()
 			return nil, fmt.Errorf("prepare probe: %w", err)
 		}
+	} else {
+		st.hasCNAME = tableHasColumn(db, "hosts", "cname")
 	}
 	return st, nil
+}
+
+func tableHasColumn(db *sql.DB, table, col string) bool {
+	rows, err := db.Query("PRAGMA table_info(" + table + ")")
+	if err != nil {
+		return false
+	}
+	defer func() { _ = rows.Close() }()
+	for rows.Next() {
+		var (
+			cid       int
+			name      string
+			colType   string
+			notNull   int
+			dfltValue any
+			pk        int
+		)
+		if err := rows.Scan(&cid, &name, &colType, &notNull, &dfltValue, &pk); err == nil && strings.EqualFold(name, col) {
+			return true
+		}
+	}
+	return false
 }
 
 // Close closes the underlying SQLite database and prepared statements.
@@ -122,6 +165,9 @@ func (s *Store) Close() error {
 	if s.refSt != nil {
 		_ = s.refSt.Close()
 	}
+	if s.dnsSt != nil {
+		_ = s.dnsSt.Close()
+	}
 	if s.probeSt != nil {
 		_ = s.probeSt.Close()
 	}
@@ -129,11 +175,6 @@ func (s *Store) Close() error {
 		return s.db.Close()
 	}
 	return nil
-}
-
-// DB returns the underlying sql.DB.
-func (s *Store) DB() *sql.DB {
-	return s.db
 }
 
 func now() string { return time.Now().UTC().Format(time.RFC3339) }
@@ -209,9 +250,19 @@ func (s *Store) QueryHostRefs(root string) ([]types.HostRef, error) {
 	return out, rows.Err()
 }
 
-// SaveProbe updates probe results for a host.
+// SaveDNS updates DNS records (IPs, CNAME chain, CDN, and IP-range WAF) for a host.
+func (s *Store) SaveDNS(host string, d types.DNSResult) error {
+	_, err := s.dnsSt.Exec(d.IPs, d.CNAME, d.CDN, d.WAF, d.WAF, host)
+	return err
+}
+
+// SaveProbe updates probe results for a host while preserving DNS fields when httpx leaves them blank.
 func (s *Store) SaveProbe(host string, p types.Probe) error {
-	_, err := s.probeSt.Exec(p.URL, p.Status, p.Title, p.Server, packTech(p.Tech), p.IPs, p.CDN, p.WAF, p.Length, p.AuthType, p.AuthURL, host)
+	_, err := s.probeSt.Exec(
+		p.URL, p.Status, p.Title, p.Server, packTech(p.Tech),
+		p.IPs, p.IPs, p.CDN, p.CDN, p.WAF, p.WAF,
+		p.Length, p.AuthType, p.AuthURL, host,
+	)
 	return err
 }
 
@@ -221,16 +272,68 @@ func (s *Store) UpdateAuth(host, authType, authURL string) error {
 	return err
 }
 
-// ResetProbe clears last scan's probe data so hosts that went down show as dead.
-func (s *Store) ResetProbe(root string) error {
-	_, err := s.db.Exec(`UPDATE hosts SET alive=0, url='', status=0, title='', server='', tech='', ips='', cdn='', waf='', length=0, auth_type='', auth_url='' WHERE root=?`, root)
+// ResetDNS clears previous DNS resolution columns for a root domain before a DNS-only refresh.
+func (s *Store) ResetDNS(root string) error {
+	_, err := s.db.Exec(`UPDATE hosts SET ips='', cname='', cdn='' WHERE root=?`, root)
 	return err
+}
+
+// ResetProbe clears last scan's DNS and probe data so hosts that went down show as dead.
+func (s *Store) ResetProbe(root string) error {
+	_, err := s.db.Exec(`UPDATE hosts SET alive=0, url='', status=0, title='', server='', tech='', ips='', cname='', cdn='', waf='', length=0, auth_type='', auth_url='' WHERE root=?`, root)
+	return err
+}
+
+// DeleteHosts removes wildcard-polluted subdomains (never deleting the root apex) and any associated host_refs.
+func (s *Store) DeleteHosts(root string, hosts []string) error {
+	filtered := make([]string, 0, len(hosts))
+	for _, h := range hosts {
+		if h != "" && h != root {
+			filtered = append(filtered, h)
+		}
+	}
+	if len(filtered) == 0 {
+		return nil
+	}
+
+	tx, err := s.db.Begin()
+	if err != nil {
+		return err
+	}
+	defer func() { _ = tx.Rollback() }()
+
+	const batchSize = 400
+	for start := 0; start < len(filtered); start += batchSize {
+		chunk := filtered[start:min(start+batchSize, len(filtered))]
+		n := len(chunk)
+		ph := strings.TrimSuffix(strings.Repeat("?,", n), ",")
+
+		// Box each hostname once into a single backing slice shared across both DELETE statements.
+		args := make([]any, 1+n*2)
+		args[0] = root
+		for i, h := range chunk {
+			args[1+i] = h
+		}
+		copy(args[1+n:], args[1:1+n])
+
+		if _, err := tx.Exec("DELETE FROM hosts WHERE root = ? AND host IN ("+ph+")", args[:1+n]...); err != nil {
+			return err
+		}
+		if _, err := tx.Exec("DELETE FROM host_refs WHERE host IN ("+ph+") OR referrer IN ("+ph+")", args[1:]...); err != nil {
+			return err
+		}
+	}
+	return tx.Commit()
 }
 
 // QueryHosts fetches hosts matching the given filter.
 func (s *Store) QueryHosts(f types.Filter) ([]types.Host, error) {
-	w, args := buildWhere(f)
-	rows, err := s.db.Query("SELECT "+hostCols+" FROM hosts"+w+" ORDER BY root, depth, host", args...)
+	w, args := buildWhere(f, s.hasCNAME)
+	cols := hostCols
+	if !s.hasCNAME {
+		cols = hostColsLegacy
+	}
+	rows, err := s.db.Query("SELECT "+cols+" FROM hosts"+w+" ORDER BY root, depth, host", args...)
 	if err != nil {
 		return nil, err
 	}
@@ -240,7 +343,7 @@ func (s *Store) QueryHosts(f types.Filter) ([]types.Host, error) {
 		var h types.Host
 		var tech string
 		if err := rows.Scan(&h.Host, &h.Root, &h.Depth, &h.Sources, &h.FirstSeen, &h.LastSeen, &h.New,
-			&h.Alive, &h.URL, &h.Status, &h.Title, &h.Server, &tech, &h.IPs, &h.CDN, &h.WAF, &h.Length,
+			&h.Alive, &h.URL, &h.Status, &h.Title, &h.Server, &tech, &h.IPs, &h.CNAME, &h.CDN, &h.WAF, &h.Length,
 			&h.AuthType, &h.AuthURL); err != nil {
 			return nil, err
 		}
@@ -325,7 +428,7 @@ ORDER BY s.root`
 	return roots, rows.Err()
 }
 
-func buildWhere(f types.Filter) (string, []any) {
+func buildWhere(f types.Filter, hasCNAME bool) (string, []any) {
 	var conds []string
 	var args []any
 	or := func(col, pattern string, vals []string) {
@@ -357,6 +460,25 @@ func buildWhere(f types.Filter) (string, []any) {
 	case "no":
 		conds = append(conds, "alive = 0")
 	}
+	switch f.Resolved {
+	case "yes":
+		conds = append(conds, "ips <> ''")
+	case "no":
+		conds = append(conds, "ips = ''")
+	}
+	if f.HasCNAME || len(f.CNAMETarget) > 0 || f.Dangling {
+		if !hasCNAME {
+			conds = append(conds, "1 = 0")
+		} else {
+			if f.HasCNAME {
+				conds = append(conds, "cname <> ''")
+			}
+			or("cname", "%%%s%%", f.CNAMETarget)
+			if f.Dangling {
+				conds = append(conds, "cname <> '' AND ips = ''")
+			}
+		}
+	}
 	if len(f.Status) > 0 {
 		conds = append(conds, "status IN ("+strings.TrimSuffix(strings.Repeat("?,", len(f.Status)), ",")+")")
 		for _, s := range f.Status {
@@ -374,10 +496,6 @@ func buildWhere(f types.Filter) (string, []any) {
 		conds = append(conds, "root = ?")
 		args = append(args, f.Root)
 	}
-	if f.Target != "" {
-		conds = append(conds, "root = ?")
-		args = append(args, f.Target)
-	}
 	if f.AuthType != "" {
 		conds = append(conds, "auth_type = ?")
 		args = append(args, f.AuthType)
@@ -388,8 +506,10 @@ func buildWhere(f types.Filter) (string, []any) {
 	return " WHERE " + strings.Join(conds, " AND "), args
 }
 
+var sqlLikeReplacer = strings.NewReplacer(`\`, `\\`, `%`, `\%`, `_`, `\_`)
+
 func likeEscape(s string) string {
-	return strings.NewReplacer(`\`, `\\`, `%`, `\%`, `_`, `\_`).Replace(s)
+	return sqlLikeReplacer.Replace(s)
 }
 
 func packTech(t []string) string {

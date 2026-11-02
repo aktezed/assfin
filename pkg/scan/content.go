@@ -14,6 +14,8 @@ import (
 	"sync"
 	"time"
 	"unicode/utf8"
+
+	"github.com/aktezed/assfin/pkg/types"
 )
 
 const maxContentReadBytes = 1 << 20
@@ -261,7 +263,7 @@ func FetchAssetHosts(ctx context.Context, urls []string, o ProbeOpts) map[string
 					out[referrer] = make(map[string]string)
 				}
 				if _, exists := out[referrer][h]; !exists {
-					out[referrer][h] = clipRunes("asset:"+assetPath+": "+snippets[h], 140)
+					out[referrer][h] = types.ClipRunes("asset:"+assetPath+": "+snippets[h], 140)
 				}
 			}
 		}(rawURL)
@@ -343,13 +345,5 @@ func extractSnippet(body []byte, start, end int) string {
 		b.WriteRune(r)
 		prevSpace = false
 	}
-	return clipRunes(strings.TrimSpace(b.String()), 120)
-}
-
-func clipRunes(s string, limit int) string {
-	r := []rune(s)
-	if len(r) <= limit {
-		return s
-	}
-	return string(r[:limit-1]) + "…"
+	return types.ClipRunes(strings.TrimSpace(b.String()), 120)
 }

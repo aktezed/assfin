@@ -39,6 +39,14 @@ type DNSResult struct {
 	Wildcard bool
 }
 
+// SourceStat tracks per-source subdomain discovery and rejection counts.
+type SourceStat struct {
+	Source       string `json:"source"`
+	Returned     int    `json:"returned"`
+	Unresolvable int    `json:"unresolvable"`
+	Malformed    int    `json:"malformed"`
+}
+
 // Probe is the subset of an httpx result stored per host.
 type Probe struct {
 	URL        string

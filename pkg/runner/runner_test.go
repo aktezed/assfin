@@ -733,11 +733,15 @@ func TestExecuteScanDNSResolutionWildcardDanglingAndGhostPruning(t *testing.T) {
 		switch domain {
 		case "example.test":
 			return map[string][]string{
-				"app.example.test":         {"subfinder"},
-				"dead-ct.example.test":     {"crtsh"},
-				"wild-1.example.test":      {"subfinder"},
-				"wild-2.example.test":      {"subfinder"},
-				"legacy-docs.example.test": {"crtsh"},
+				"app.example.test":                    {"subdomaincenter", "crtsh"},
+				"dead-ct.example.test":                {"subdomaincenter"},
+				"aeae.example.test":                   {"subdomaincenter"},
+				"caca.example.test":                   {"subdomaincenter"},
+				"3net.example.test.aeae.example.test": {"subdomaincenter"},
+				"3net.example.test.ioio.example.test": {"subdomaincenter"},
+				"wild-1.example.test":                 {"subfinder"},
+				"wild-2.example.test":                 {"subfinder"},
+				"legacy-docs.example.test":            {"crtsh"},
 			}, nil
 		case "v3.example.test":
 			return map[string][]string{
@@ -754,9 +758,13 @@ func TestExecuteScanDNSResolutionWildcardDanglingAndGhostPruning(t *testing.T) {
 		t.Fatalf("ExecuteScan: %v", err)
 	}
 
-	// 1. Dead, wildcard, and dangling-CNAME hosts must never reach httpx TCP probing.
+	// 1. Dead, wildcard, malformed, and dangling-CNAME hosts must never reach httpx TCP probing.
 	for _, mustSkipHTTP := range []string{
 		"dead-ct.example.test",
+		"aeae.example.test",
+		"caca.example.test",
+		"3net.example.test.aeae.example.test",
+		"3net.example.test.ioio.example.test",
 		"wild-1.example.test",
 		"wild-2.example.test",
 		"legacy-docs.example.test",
@@ -772,10 +780,18 @@ func TestExecuteScanDNSResolutionWildcardDanglingAndGhostPruning(t *testing.T) {
 		}
 	}
 
-	// 2. Unresolvable or wildcard content candidates must never trigger recursive subfinder queries.
-	for _, ghost := range []string{"ghost-internal.example.test", "js-ghost.example.test", "wild-link.example.test"} {
+	// 2. Malformed passive hosts and unresolvable/wildcard content candidates must never trigger recursive subfinder queries.
+	for _, ghost := range []string{
+		"aeae.example.test",
+		"caca.example.test",
+		"3net.example.test.aeae.example.test",
+		"3net.example.test.ioio.example.test",
+		"ghost-internal.example.test",
+		"js-ghost.example.test",
+		"wild-link.example.test",
+	} {
 		if enumCalls[ghost] > 0 {
-			t.Errorf("unverified content candidate %s must not enter recursive subfinder crawl", ghost)
+			t.Errorf("rejected candidate %s must not enter recursive subfinder crawl", ghost)
 		}
 	}
 
@@ -794,8 +810,14 @@ func TestExecuteScanDNSResolutionWildcardDanglingAndGhostPruning(t *testing.T) {
 		byHost[h.Host] = h
 	}
 
-	// 3. Wildcard hosts and unresolvable content ghosts must be absent from SQLite.
+	// 3. Wildcard, malformed, and unresolvable hosts (both passive and content-derived) must be absent from SQLite.
 	for _, absent := range []string{
+		"aeae.example.test",
+		"caca.example.test",
+		"3net.example.test.aeae.example.test",
+		"3net.example.test.ioio.example.test",
+		"dead-ct.example.test",
+		"dead-child.v3.example.test",
 		"wild-1.example.test",
 		"wild-2.example.test",
 		"wild-link.example.test",
@@ -804,19 +826,13 @@ func TestExecuteScanDNSResolutionWildcardDanglingAndGhostPruning(t *testing.T) {
 		"js-ghost.example.test",
 	} {
 		if _, exists := byHost[absent]; exists {
-			t.Errorf("expected %s to be pruned from SQLite hosts table", absent)
+			t.Errorf("expected %s to be absent from SQLite hosts table", absent)
 		}
 	}
 
-	// 4. Passive non-wildcard NXDOMAIN hosts stay in SQLite with alive=0.
-	for _, deadPassive := range []string{"dead-ct.example.test", "dead-child.v3.example.test"} {
-		h, ok := byHost[deadPassive]
-		if !ok {
-			t.Fatalf("expected passive NXDOMAIN host %s to remain in SQLite as alive=0", deadPassive)
-		}
-		if h.Alive || h.IPs != "" {
-			t.Errorf("expected %s alive=false and empty IPs, got %+v", deadPassive, h)
-		}
+	// 4. Real, resolvable hosts from the same noisy source remain intact.
+	if app, ok := byHost["app.example.test"]; !ok || !app.Alive {
+		t.Errorf("expected resolvable host app.example.test to remain intact and alive, got %+v", app)
 	}
 
 	// 5. Active CNAME and dangling CNAME records (passive + content-derived) are stored accurately.
@@ -892,5 +908,16 @@ func TestExecuteScanDNSResolutionWildcardDanglingAndGhostPruning(t *testing.T) {
 	}
 	if len(npHosts) != 3 { // example.test, app.example.test, legacy-docs.example.test (wild-1 pruned)
 		t.Fatalf("expected 3 hosts in -no-probe DB after wildcard pruning, got %+v", npHosts)
+	}
+
+	var sumBuf bytes.Buffer
+	PrintTargetSummary(&sumBuf, "example.test", npHosts, types.SourceStat{
+		Source:       "subdomaincenter",
+		Returned:     87,
+		Unresolvable: 61,
+		Malformed:    12,
+	})
+	if !strings.Contains(sumBuf.String(), "subdomaincenter: 87 returned, 61 unresolvable, 12 malformed") {
+		t.Errorf("expected per-source rejection line in summary, got:\n%s", sumBuf.String())
 	}
 }

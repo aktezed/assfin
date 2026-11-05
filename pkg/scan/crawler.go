@@ -13,13 +13,15 @@ type EnumFunc func(ctx context.Context, domain string) (map[string][]string, err
 
 // CrawlOpts defines options for recursive enumeration crawling.
 type CrawlOpts struct {
-	Depth    int             // recursion rounds after the root query (-1 = auto/unlimited until no new hosts, 0 = root only)
-	MaxHosts int             // stop once this many hosts are known
-	Conc     int             // domains enumerated in parallel
-	Exclude  []string        // hosts or suffixes to drop
-	Seeds    []string        // optional starting seeds instead of root for feedback rounds
-	Seen     map[string]bool // optional shared seen-hosts set across rounds
-	Queried  map[string]bool // optional shared queried-domains set across rounds
+	Depth       int                                 // recursion rounds after the root query (-1 = auto/unlimited until no new hosts, 0 = root only)
+	MaxHosts    int                                 // stop once this many hosts are known
+	Conc        int                                 // domains enumerated in parallel
+	Exclude     []string                            // hosts or suffixes to drop
+	Seeds       []string                            // optional starting seeds instead of root for feedback rounds
+	Seen        map[string]bool                     // optional shared seen-hosts set across rounds
+	Queried     map[string]bool                     // optional shared queried-domains set across rounds
+	Malformed   map[string]bool                     // optional shared malformed-hosts set across rounds
+	OnMalformed func(host string, sources []string) // optional callback invoked once per malformed in-scope host
 }
 
 // Crawl queries root (or o.Seeds), then newly found subdomains level by level until nothing new
@@ -34,6 +36,11 @@ func Crawl(ctx context.Context, root string, o CrawlOpts, enum EnumFunc, onFound
 	queried := o.Queried
 	if queried == nil {
 		queried = make(map[string]bool)
+	}
+
+	malformed := o.Malformed
+	if malformed == nil {
+		malformed = make(map[string]bool)
 	}
 
 	var level []string
@@ -100,12 +107,22 @@ func Crawl(ctx context.Context, root string, o CrawlOpts, enum EnumFunc, onFound
 					host    string
 					sources []string
 				}
-				var toNotify []item
+				var (
+					toNotify []item
+					toReject []item
+				)
 
 				mu.Lock()
 				for _, raw := range hosts {
 					h := Normalize(raw)
-					if seen[h] || !InScope(h, root, o.Exclude) || full() {
+					if seen[h] || !inScopeSuffix(h, root, o.Exclude) || full() {
+						continue
+					}
+					if IsMalformedHost(h, root) {
+						if !malformed[h] {
+							malformed[h] = true
+							toReject = append(toReject, item{host: h, sources: res[raw]})
+						}
 						continue
 					}
 					seen[h] = true
@@ -124,6 +141,13 @@ func Crawl(ctx context.Context, root string, o CrawlOpts, enum EnumFunc, onFound
 				}
 				mu.Unlock()
 
+				if o.OnMalformed != nil {
+					for _, it := range toReject {
+						notifyMu.Lock()
+						o.OnMalformed(it.host, it.sources)
+						notifyMu.Unlock()
+					}
+				}
 				for _, it := range toNotify {
 					notifyMu.Lock()
 					onFound(it.host, it.sources)
@@ -164,8 +188,12 @@ func Normalize(h string) string {
 	return strings.TrimPrefix(strings.TrimSuffix(strings.ToLower(strings.TrimSpace(h)), "."), "*.")
 }
 
-// InScope checks whether a host belongs to the target domain and is not excluded.
+// InScope checks whether a host belongs to the target domain, is not excluded, and is not malformed.
 func InScope(h, root string, exclude []string) bool {
+	return inScopeSuffix(h, root, exclude) && !IsMalformedHost(h, root)
+}
+
+func inScopeSuffix(h, root string, exclude []string) bool {
 	if !strings.HasSuffix(h, "."+root) {
 		return false
 	}
@@ -175,6 +203,55 @@ func InScope(h, root string, exclude []string) bool {
 		}
 	}
 	return true
+}
+
+// IsMalformedHost reports whether h has invalid DNS syntax or concatenation artifacts under root.
+func IsMalformedHost(h, root string) bool {
+	suffix := "." + root
+	if root == "" || !strings.HasSuffix(h, suffix) || len(h) > 253 {
+		return true
+	}
+	sub := strings.TrimSuffix(h, suffix)
+	if sub == "" || strings.Contains("."+sub, "."+root) {
+		return true
+	}
+	labels := strings.Split(h, ".")
+	subCount := len(labels) - strings.Count(root, ".") - 1
+	for i, l := range labels {
+		if !isValidDNSLabel(l) {
+			return true
+		}
+		if i < subCount && (labels[i] == labels[i+1] || isDoubledAlphaLabel(l)) {
+			return true
+		}
+	}
+	return false
+}
+
+func isValidDNSLabel(l string) bool {
+	if len(l) == 0 || len(l) > 63 || l[0] == '-' || l[len(l)-1] == '-' {
+		return false
+	}
+	for i := range len(l) {
+		c := l[i]
+		if (c < 'a' || c > 'z') && (c < '0' || c > '9') && c != '-' {
+			return false
+		}
+	}
+	return true
+}
+
+func isDoubledAlphaLabel(l string) bool {
+	if len(l) < 4 || len(l)%2 != 0 {
+		return false
+	}
+	for i := range len(l) {
+		if l[i] < 'a' || l[i] > 'z' {
+			return false
+		}
+	}
+	half := len(l) / 2
+	return l[:half] == l[half:]
 }
 
 // LabelDepth returns how many labels a host has beyond root: a.com=0, x.a.com=1, y.x.a.com=2.

@@ -187,3 +187,86 @@ func TestCrawlSeedsFeedback(t *testing.T) {
 		t.Errorf("already-queried domains should not be re-queried: %v", calls)
 	}
 }
+
+func TestIsMalformedHost(t *testing.T) {
+	t.Parallel()
+	tests := []struct {
+		name string
+		host string
+		root string
+		want bool
+	}{
+		{name: "valid single label", host: "api.example.com", root: "example.com", want: false},
+		{name: "valid alphanumeric label", host: "3net.example.com", root: "example.com", want: false},
+		{name: "valid numeric year label", host: "2020.example.com", root: "example.com", want: false},
+		{name: "valid nested labels", host: "v1.api.example.com", root: "example.com", want: false},
+		{name: "doubled cctld aeae", host: "aeae.example.com", root: "example.com", want: true},
+		{name: "doubled cctld caca", host: "caca.example.com", root: "example.com", want: true},
+		{name: "doubled cctld ioio", host: "ioio.example.com", root: "example.com", want: true},
+		{name: "concatenated root with aeae", host: "3net.example.com.aeae.example.com", root: "example.com", want: true},
+		{name: "concatenated root with caca", host: "3net.example.com.caca.example.com", root: "example.com", want: true},
+		{name: "concatenated root with ioio", host: "3net.example.com.ioio.example.com", root: "example.com", want: true},
+		{name: "concatenated cctld root fused", host: "3net.example.aeae.example.ae", root: "example.ae", want: true},
+		{name: "adjacent identical labels", host: "ae.ae.example.com", root: "example.com", want: true},
+		{name: "leading hyphen label", host: "-bad.example.com", root: "example.com", want: true},
+		{name: "empty label", host: "bad..example.com", root: "example.com", want: true},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			if got := IsMalformedHost(tt.host, tt.root); got != tt.want {
+				t.Errorf("IsMalformedHost(%q, %q) = %v, want %v", tt.host, tt.root, got, tt.want)
+			}
+		})
+	}
+}
+
+func TestCrawlRejectsMalformedHosts(t *testing.T) {
+	t.Parallel()
+	noisyTree := map[string][]string{
+		"a.com": {
+			"api.a.com",
+			"aeae.a.com",
+			"caca.a.com",
+			"3net.a.com.aeae.a.com",
+			"3net.a.com.ioio.a.com",
+		},
+		"api.a.com":             {"v1.api.a.com"},
+		"aeae.a.com":            {"poison.aeae.a.com"},
+		"3net.a.com.aeae.a.com": {"poison2.a.com"},
+	}
+
+	calls := map[string]int{}
+	var (
+		found     []string
+		malformed []string
+	)
+	err := Crawl(context.Background(), "a.com", CrawlOpts{
+		Depth: -1,
+		Conc:  2,
+		OnMalformed: func(h string, _ []string) {
+			malformed = append(malformed, h)
+		},
+	}, fakeEnum(noisyTree, calls), func(h string, _ []string) {
+		found = append(found, h)
+	})
+	if err != nil {
+		t.Fatalf("Crawl: %v", err)
+	}
+
+	slices.Sort(found)
+	slices.Sort(malformed)
+
+	if want := []string{"api.a.com", "v1.api.a.com"}; !slices.Equal(found, want) {
+		t.Errorf("found = %v, want %v", found, want)
+	}
+	if want := []string{"3net.a.com.aeae.a.com", "3net.a.com.ioio.a.com", "aeae.a.com", "caca.a.com"}; !slices.Equal(malformed, want) {
+		t.Errorf("malformed = %v, want %v", malformed, want)
+	}
+	for _, bad := range []string{"aeae.a.com", "caca.a.com", "3net.a.com.aeae.a.com", "3net.a.com.ioio.a.com", "a.com.aeae.a.com"} {
+		if calls[bad] > 0 {
+			t.Errorf("malformed host %q was queued into recursion (%d calls)", bad, calls[bad])
+		}
+	}
+}

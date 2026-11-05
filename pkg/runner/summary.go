@@ -9,8 +9,8 @@ import (
 )
 
 // PrintTargetSummary writes a structured, headless terminal dossier for a target domain.
-func PrintTargetSummary(w io.Writer, root string, hosts []types.Host) {
-	if len(hosts) == 0 {
+func PrintTargetSummary(w io.Writer, root string, hosts []types.Host, sourceStats ...types.SourceStat) {
+	if len(hosts) == 0 && len(sourceStats) == 0 {
 		fmt.Fprintf(w, "No assets discovered for target: %s\n", root)
 		return
 	}
@@ -132,6 +132,15 @@ func PrintTargetSummary(w io.Writer, root string, hosts []types.Host) {
 				wafLabel = fmt.Sprintf(" [%s]", h.WAF)
 			}
 			fmt.Fprintf(w, "    • %-32s <- via %s [%s]%s\n", h.Host, referrer, statusLabel, wafLabel)
+		}
+	}
+
+	if len(sourceStats) > 0 {
+		fmt.Fprintln(w, subDiv)
+		fmt.Fprintln(w, "  PASSIVE SOURCE SUMMARY:")
+		for _, s := range sourceStats {
+			fmt.Fprintf(w, "    • %s: %d returned, %d unresolvable, %d malformed\n",
+				s.Source, s.Returned, s.Unresolvable, s.Malformed)
 		}
 	}
 

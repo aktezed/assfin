@@ -169,15 +169,31 @@ func (r *Runner) ExecuteScan(ctx context.Context) error {
 			dbErr      error
 			discovered atomic.Int64
 		)
-		seen := map[string]bool{root: true}
-		queried := map[string]bool{root: true}
+		st := &scanState{
+			scanID:      scanID,
+			root:        root,
+			exclude:     exclude,
+			enum:        enum,
+			resolve:     resolve,
+			dnsThreads:  dnsThreads,
+			dnsRate:     dnsRate,
+			seen:        map[string]bool{root: true},
+			queried:     map[string]bool{root: true},
+			malformed:   make(map[string]bool),
+			wildcards:   make(map[string]bool),
+			deadContent: make(map[string]bool),
+			hostSources: make(map[string][]string),
+			sourceStats: make(map[string]*types.SourceStat),
+		}
 		crawlOpts := scan.CrawlOpts{
-			Depth:    r.options.Depth,
-			MaxHosts: r.options.MaxHosts,
-			Conc:     r.options.SubfinderConcurrency,
-			Exclude:  exclude,
-			Seen:     seen,
-			Queried:  queried,
+			Depth:       r.options.Depth,
+			MaxHosts:    r.options.MaxHosts,
+			Conc:        r.options.SubfinderConcurrency,
+			Exclude:     exclude,
+			Seen:        st.seen,
+			Queried:     st.queried,
+			Malformed:   st.malformed,
+			OnMalformed: st.recordMalformed,
 		}
 
 		enumStart := time.Now()
@@ -198,6 +214,7 @@ func (r *Runner) ExecuteScan(ctx context.Context) error {
 
 		err = scan.Crawl(ctx, root, crawlOpts, enum, func(h string, sources []string) {
 			discovered.Add(1)
+			st.recordFound(h, sources)
 			if err := dbStore.UpsertHost(scanID, root, h, scan.LabelDepth(h, root), sources); err != nil && dbErr == nil {
 				dbErr = err
 			}
@@ -214,20 +231,6 @@ func (r *Runner) ExecuteScan(ctx context.Context) error {
 
 		gologger.Info().Msgf("[%s] enumeration completed: %d hosts discovered in %s",
 			root, discovered.Load(), types.FormatDuration(enumDuration))
-
-		st := &scanState{
-			scanID:      scanID,
-			root:        root,
-			exclude:     exclude,
-			enum:        enum,
-			resolve:     resolve,
-			dnsThreads:  dnsThreads,
-			dnsRate:     dnsRate,
-			seen:        seen,
-			queried:     queried,
-			wildcards:   make(map[string]bool),
-			deadContent: make(map[string]bool),
-		}
 
 		var (
 			dnsDuration   time.Duration
@@ -312,8 +315,16 @@ func (r *Runner) ExecuteScan(ctx context.Context) error {
 				types.FormatDuration(enumDuration), types.FormatDuration(dnsDuration), types.FormatDuration(probeDuration), dbPath)
 		}
 
+		sourceStats := st.sortedSourceStats()
+		for _, s := range sourceStats {
+			if s.Unresolvable > 0 || s.Malformed > 0 {
+				gologger.Info().Msgf("[%s] %s: %d returned, %d unresolvable, %d malformed",
+					root, s.Source, s.Returned, s.Unresolvable, s.Malformed)
+			}
+		}
+
 		if !r.options.Silent {
-			PrintTargetSummary(os.Stdout, root, all)
+			PrintTargetSummary(os.Stdout, root, all, sourceStats...)
 		}
 	}
 
@@ -358,8 +369,56 @@ type scanState struct {
 	dnsRate     int
 	seen        map[string]bool
 	queried     map[string]bool
+	malformed   map[string]bool
 	wildcards   map[string]bool
 	deadContent map[string]bool
+	hostSources map[string][]string
+	sourceStats map[string]*types.SourceStat
+}
+
+func (st *scanState) stat(source string) *types.SourceStat {
+	if st.sourceStats[source] == nil {
+		st.sourceStats[source] = &types.SourceStat{Source: source}
+	}
+	return st.sourceStats[source]
+}
+
+func (st *scanState) recordFound(host string, sources []string) {
+	st.hostSources[scan.Normalize(host)] = sources
+	for _, s := range sources {
+		st.stat(s).Returned++
+	}
+}
+
+func (st *scanState) recordMalformed(_ string, sources []string) {
+	for _, s := range sources {
+		stat := st.stat(s)
+		stat.Returned++
+		stat.Malformed++
+	}
+}
+
+func (st *scanState) recordUnresolvable(host string) {
+	for _, s := range st.hostSources[scan.Normalize(host)] {
+		st.stat(s).Unresolvable++
+	}
+}
+
+func (st *scanState) sortedSourceStats() []types.SourceStat {
+	if len(st.sourceStats) == 0 {
+		return nil
+	}
+	out := make([]types.SourceStat, 0, len(st.sourceStats))
+	for _, s := range st.sourceStats {
+		out = append(out, *s)
+	}
+	slices.SortFunc(out, func(a, b types.SourceStat) int {
+		if a.Returned != b.Returned {
+			return b.Returned - a.Returned
+		}
+		return strings.Compare(a.Source, b.Source)
+	})
+	return out
 }
 
 type pendingRef struct {
@@ -577,15 +636,18 @@ func (r *Runner) probeAndDiscover(ctx context.Context, dbStore *store.Store, st 
 				crawlFound []string
 			)
 			crawlErr := scan.Crawl(ctx, st.root, scan.CrawlOpts{
-				Depth:    feedbackDepth,
-				MaxHosts: r.options.MaxHosts,
-				Conc:     r.options.SubfinderConcurrency,
-				Exclude:  st.exclude,
-				Seeds:    verifiedSeeds,
-				Seen:     st.seen,
-				Queried:  st.queried,
+				Depth:       feedbackDepth,
+				MaxHosts:    r.options.MaxHosts,
+				Conc:        r.options.SubfinderConcurrency,
+				Exclude:     st.exclude,
+				Seeds:       verifiedSeeds,
+				Seen:        st.seen,
+				Queried:     st.queried,
+				Malformed:   st.malformed,
+				OnMalformed: st.recordMalformed,
 			}, st.enum, func(h string, sources []string) {
 				crawlFound = append(crawlFound, h)
+				st.recordFound(h, sources)
 				if err := dbStore.UpsertHost(st.scanID, st.root, h, scan.LabelDepth(h, st.root), sources); err != nil && crawlDBErr == nil {
 					crawlDBErr = err
 				}
@@ -630,8 +692,8 @@ func (r *Runner) filterStoredHostsDNS(
 	var (
 		resolved      []string
 		wildcards     []string
+		dead          []string
 		danglingCount int
-		deadCount     int
 	)
 	for _, h := range hosts {
 		res, ok := resMap[scan.Normalize(h)]
@@ -654,12 +716,15 @@ func (r *Runner) filterStoredHostsDNS(
 		case res.CNAME != "":
 			danglingCount++
 		default:
-			deadCount++
+			if h != st.root {
+				dead = append(dead, h)
+				st.recordUnresolvable(h)
+			}
 		}
 	}
 
-	if len(wildcards) > 0 {
-		if dErr := dbStore.DeleteHosts(st.root, wildcards); dErr != nil {
+	if pruned := append(wildcards, dead...); len(pruned) > 0 {
+		if dErr := dbStore.DeleteHosts(st.root, pruned); dErr != nil {
 			return nil, dur, dErr
 		}
 	}
@@ -668,8 +733,8 @@ func (r *Runner) filterStoredHostsDNS(
 		return nil, dur, err
 	}
 
-	gologger.Info().Msgf("[%s] dns resolution completed: %d/%d resolved, %d dangling CNAME, %d wildcard pruned, %d dead skipped in %s",
-		st.root, len(resolved), len(hosts), danglingCount, len(wildcards), deadCount, types.FormatDuration(dur))
+	gologger.Info().Msgf("[%s] dns resolution completed: %d/%d resolved, %d dangling CNAME, %d wildcard pruned, %d unresolvable pruned in %s",
+		st.root, len(resolved), len(hosts), danglingCount, len(wildcards), len(dead), types.FormatDuration(dur))
 
 	return resolved, dur, nil
 }

@@ -2,8 +2,10 @@ package main
 
 import (
 	"context"
+	"errors"
 	"os"
 	"os/signal"
+	"syscall"
 
 	"github.com/aktezed/assfin/pkg/runner"
 	"github.com/projectdiscovery/gologger"
@@ -12,7 +14,7 @@ import (
 func main() {
 	options := runner.ParseOptions()
 
-	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt)
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 
 	r, err := runner.NewRunner(options)
@@ -23,6 +25,10 @@ func main() {
 
 	if err := r.Run(ctx); err != nil {
 		_ = r.Close()
+		var exitErr *runner.ExitError
+		if errors.As(err, &exitErr) {
+			os.Exit(exitErr.Code)
+		}
 		gologger.Fatal().Msgf("Execution failed: %s\n", err)
 	}
 }

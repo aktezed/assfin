@@ -22,6 +22,7 @@ type CrawlOpts struct {
 	Queried     map[string]bool                     // optional shared queried-domains set across rounds
 	Malformed   map[string]bool                     // optional shared malformed-hosts set across rounds
 	OnMalformed func(host string, sources []string) // optional callback invoked once per malformed in-scope host
+	OnRound     func(round int)                     // optional callback invoked after each completed round
 }
 
 // Crawl queries root (or o.Seeds), then newly found subdomains level by level until nothing new
@@ -160,6 +161,9 @@ func Crawl(ctx context.Context, root string, o CrawlOpts, enum EnumFunc, onFound
 			return err
 		}
 		log.Printf("round %d: %d newqueued, %d total hosts", round, len(next), len(seen))
+		if o.OnRound != nil {
+			o.OnRound(round + 1)
+		}
 		level = next
 	}
 	return nil

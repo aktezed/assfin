@@ -347,4 +347,85 @@ VALUES ('api.old.com', 'old.com', 1, 'crtsh', '2026-01-01T00:00:00Z', '2026-01-0
 	if err != nil || len(dangling) != 0 {
 		t.Fatalf("expected 0 dangling rows on legacy DB, got %+v (err=%v)", dangling, err)
 	}
+	done, err := ro.CompletedRoots()
+	if err != nil || !done["old.com"] {
+		t.Fatalf("expected old.com completed on legacy DB, got %v (err=%v)", done, err)
+	}
+}
+
+func TestScanCheckpointAndUnprobedScope(t *testing.T) {
+	dbPath := filepath.Join(t.TempDir(), "checkpoint.db")
+	s, err := New(dbPath, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = s.Close() }()
+
+	// 1. Finished scan -> CompletedRoots includes it.
+	sA, err := s.StartScan("a.test", `{"NoProbe":false}`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_ = s.SetScanRounds(sA, 2)
+	if err := s.FinishScan(sA); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.UpsertHost(sA, "a.test", "app.a.test", 1, []string{"crtsh"}); err != nil {
+		t.Fatal(err)
+	}
+
+	// 2. Interrupted scan (no FinishScan) -> excluded from CompletedRoots, flagged unprobed.
+	sB, err := s.StartScan("b.test", `{"NoProbe":false}`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_ = s.SetScanRounds(sB, 1)
+	if err := s.UpsertHost(sB, "b.test", "api.b.test", 1, []string{"crtsh"}); err != nil {
+		t.Fatal(err)
+	}
+
+	// 3. Finished -no-probe scan -> CompletedRoots includes it, UnprobedScope is true.
+	sC, err := s.StartScan("c.test", `{"NoProbe":true}`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := s.UpsertHost(sC, "c.test", "web.c.test", 1, []string{"crtsh"}); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.SaveDNS("web.c.test", types.DNSResult{IPs: "1.2.3.4", Resolved: true}); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.FinishScan(sC); err != nil {
+		t.Fatal(err)
+	}
+
+	done, err := s.CompletedRoots()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !done["a.test"] || done["b.test"] || !done["c.test"] {
+		t.Fatalf("unexpected CompletedRoots: %v", done)
+	}
+
+	roots, err := s.DistinctRoots()
+	if err != nil || len(roots) != 3 {
+		t.Fatalf("unexpected DistinctRoots: %v (err=%v)", roots, err)
+	}
+
+	// a.test finished with probing (NoProbe=false) and 0 alive -> genuine dead zone, NOT unprobed.
+	if unprobed, err := s.UnprobedScope("a.test"); err != nil || unprobed {
+		t.Fatalf("a.test should not be unprobed (got %v, err=%v)", unprobed, err)
+	}
+	// b.test interrupted before probe -> unprobed.
+	if unprobed, err := s.UnprobedScope("b.test"); err != nil || !unprobed {
+		t.Fatalf("b.test should be unprobed (got %v, err=%v)", unprobed, err)
+	}
+	// c.test ran -no-probe (even though DNS populated ips) -> unprobed.
+	if unprobed, err := s.UnprobedScope("c.test"); err != nil || !unprobed {
+		t.Fatalf("c.test should be unprobed (got %v, err=%v)", unprobed, err)
+	}
+	// empty root with no hosts -> not unprobed.
+	if unprobed, err := s.UnprobedScope("missing.test"); err != nil || unprobed {
+		t.Fatalf("missing.test should not be unprobed (got %v, err=%v)", unprobed, err)
+	}
 }

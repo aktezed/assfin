@@ -2,6 +2,7 @@ package store
 
 import (
 	"database/sql"
+	"encoding/json"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -15,7 +16,8 @@ import (
 
 const schema = `
 CREATE TABLE IF NOT EXISTS scans (
-  id INTEGER PRIMARY KEY, root TEXT, started TEXT, finished TEXT, opts TEXT);
+  id INTEGER PRIMARY KEY, root TEXT, started TEXT, finished TEXT, opts TEXT,
+  rounds INT DEFAULT 0, done INT DEFAULT 0);
 CREATE TABLE IF NOT EXISTS hosts (
   host TEXT PRIMARY KEY, root TEXT, depth INT, sources TEXT,
   first_seen TEXT, last_seen TEXT, first_scan INT, last_scan INT,
@@ -75,6 +77,8 @@ func New(path string, readOnly bool) (*Store, error) {
 		_, _ = db.Exec(`ALTER TABLE hosts ADD COLUMN auth_type TEXT DEFAULT ''`)
 		_, _ = db.Exec(`ALTER TABLE hosts ADD COLUMN auth_url TEXT DEFAULT ''`)
 		_, _ = db.Exec(`ALTER TABLE hosts ADD COLUMN cname TEXT DEFAULT ''`)
+		_, _ = db.Exec(`ALTER TABLE scans ADD COLUMN rounds INT DEFAULT 0`)
+		_, _ = db.Exec(`ALTER TABLE scans ADD COLUMN done INT DEFAULT 0`)
 		st.hasCNAME = true
 
 		// Pre-compile hot-path statements to avoid SQL re-parsing on every host/probe callback.
@@ -188,10 +192,121 @@ func (s *Store) StartScan(root, opts string) (int64, error) {
 	return res.LastInsertId()
 }
 
+// SetScanRounds records the number of completed enumeration rounds for a scan.
+func (s *Store) SetScanRounds(id int64, rounds int) error {
+	_, err := s.db.Exec(`UPDATE scans SET rounds=? WHERE id=?`, rounds, id)
+	return err
+}
+
 // FinishScan marks a scan run as completed.
 func (s *Store) FinishScan(id int64) error {
-	_, err := s.db.Exec(`UPDATE scans SET finished=? WHERE id=?`, now(), id)
+	_, err := s.db.Exec(`UPDATE scans SET finished=?, done=1 WHERE id=?`, now(), id)
 	return err
+}
+
+// CompletedRoots returns the set of root domains whose latest scan finished.
+func (s *Store) CompletedRoots() (map[string]bool, error) {
+	doneExpr := "coalesce(s.finished, '') <> ''"
+	if tableHasColumn(s.db, "scans", "done") {
+		doneExpr = "(s.done = 1 OR coalesce(s.finished, '') <> '')"
+	}
+	rows, err := s.db.Query(`
+SELECT s.root
+FROM scans s
+WHERE s.id IN (SELECT max(id) FROM scans GROUP BY root)
+  AND ` + doneExpr)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	out := make(map[string]bool)
+	for rows.Next() {
+		var root string
+		if err := rows.Scan(&root); err != nil {
+			return nil, err
+		}
+		out[root] = true
+	}
+	return out, rows.Err()
+}
+
+// DistinctRoots returns all distinct root domains present in the hosts table.
+func (s *Store) DistinctRoots() ([]string, error) {
+	rows, err := s.db.Query(`SELECT DISTINCT root FROM hosts WHERE root <> '' ORDER BY root`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var roots []string
+	for rows.Next() {
+		var r string
+		if err := rows.Scan(&r); err != nil {
+			return nil, err
+		}
+		roots = append(roots, r)
+	}
+	return roots, rows.Err()
+}
+
+// UnprobedScope reports whether root (or the whole database when empty) has stored
+// hosts that have not yet been through HTTP probing.
+func (s *Store) UnprobedScope(root string) (bool, error) {
+	var (
+		where string
+		args  []any
+	)
+	if root != "" {
+		where = " WHERE root = ?"
+		args = append(args, root)
+	}
+	var total, active int
+	err := s.db.QueryRow(
+		"SELECT count(*), coalesce(sum(CASE WHEN alive = 1 OR status > 0 THEN 1 ELSE 0 END), 0) FROM hosts"+where,
+		args...,
+	).Scan(&total, &active)
+	if err != nil {
+		return false, err
+	}
+	if total == 0 || active > 0 {
+		return false, nil
+	}
+
+	scanQuery := `SELECT coalesce(s.finished, ''), coalesce(s.opts, '') FROM scans s
+WHERE s.id IN (SELECT max(id) FROM scans GROUP BY root)`
+	var scanArgs []any
+	if root != "" {
+		scanQuery = `SELECT coalesce(finished, ''), coalesce(opts, '') FROM scans WHERE root = ? ORDER BY id DESC LIMIT 1`
+		scanArgs = append(scanArgs, root)
+	}
+	rows, err := s.db.Query(scanQuery, scanArgs...)
+	if err != nil {
+		return false, err
+	}
+	defer rows.Close()
+
+	sawScan := false
+	for rows.Next() {
+		sawScan = true
+		var finished, optsJSON string
+		if err := rows.Scan(&finished, &optsJSON); err != nil {
+			return false, err
+		}
+		if finished == "" {
+			return true, nil
+		}
+		var o struct {
+			NoProbe bool `json:"NoProbe"`
+		}
+		if json.Unmarshal([]byte(optsJSON), &o) == nil && o.NoProbe {
+			return true, nil
+		}
+	}
+	if err := rows.Err(); err != nil {
+		return false, err
+	}
+	return !sawScan, nil
 }
 
 // UpsertHost records a discovered host, keeping its first-seen info on re-runs.

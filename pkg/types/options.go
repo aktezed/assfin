@@ -8,8 +8,10 @@ type Options struct {
 	Command string
 
 	// Target Inputs
-	Domain     string
-	DomainList string
+	Domain        string
+	DomainList    string
+	Resume        bool
+	SkipCompleted bool
 
 	// Output & Storage
 	DBPath string
@@ -39,6 +41,7 @@ type Options struct {
 	Timeout         int
 	FollowRedirects bool
 	NoProbe         bool
+	ProbeOnly       bool
 
 	// Asset Role / Auth Classification
 	NoAuth      bool

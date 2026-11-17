@@ -4,11 +4,13 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"path/filepath"
 	"strings"
 	"sync"
@@ -919,5 +921,164 @@ func TestExecuteScanDNSResolutionWildcardDanglingAndGhostPruning(t *testing.T) {
 	})
 	if !strings.Contains(sumBuf.String(), "subdomaincenter: 87 returned, 61 unresolvable, 12 malformed") {
 		t.Errorf("expected per-source rejection line in summary, got:\n%s", sumBuf.String())
+	}
+}
+
+func TestMultiRootResumeProbeOnlyAndQueryUnprobedExitCode(t *testing.T) {
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/html")
+		_, _ = fmt.Fprint(w, `<!doctype html><html><head><title>Live</title></head><body>OK</body></html>`)
+	}))
+	t.Cleanup(ts.Close)
+
+	dir := t.TempDir()
+	rootsFile := filepath.Join(dir, "roots.txt")
+	if err := os.WriteFile(rootsFile, []byte("a.test\nb.test\nc.test\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	dbPath := filepath.Join(dir, "multi.db")
+
+	// 1. Validate conflicting flags.
+	if err := validateOptions(&types.Options{Domain: "a.test", ProbeOnly: true, NoProbe: true}); err == nil {
+		t.Fatal("expected error for -probe-only with -no-probe")
+	}
+
+	// 2. Run -dL with -no-probe and cancel mid-second-root (Issue #3).
+	ctx, cancel := context.WithCancel(context.Background())
+	var enumMu sync.Mutex
+	enumCounts := make(map[string]int)
+
+	r1, err := NewRunner(&types.Options{
+		Command:    "scan",
+		DomainList: rootsFile,
+		DBPath:     dbPath,
+		Depth:      0,
+		NoProbe:    true,
+		NoDNS:      true,
+		Silent:     true,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	r1.enumFn = func(_ context.Context, domain string) (map[string][]string, error) {
+		enumMu.Lock()
+		enumCounts[domain]++
+		enumMu.Unlock()
+		if domain == "b.test" {
+			cancel()
+			return nil, context.Canceled
+		}
+		return map[string][]string{"app." + domain: {"crtsh"}}, nil
+	}
+	if err := r1.Run(ctx); !errors.Is(err, context.Canceled) {
+		t.Fatalf("expected context.Canceled on interrupted multi-root run, got %v", err)
+	}
+	_ = r1.Close()
+
+	// 3. Query -alive on unprobed root returns ErrNotProbed (exit code 2) (Issue #5).
+	rq, err := NewRunner(&types.Options{
+		Command:      "query",
+		DBPath:       dbPath,
+		Target:       "a.test",
+		Alive:        true,
+		OutputFormat: "list",
+		Silent:       true,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	qErr := rq.Run(context.Background())
+	_ = rq.Close()
+	var exitErr *ExitError
+	if !errors.As(qErr, &exitErr) || exitErr.Code != 2 || !errors.Is(qErr, ErrNotProbed) {
+		t.Fatalf("expected ExitError code 2 (ErrNotProbed), got %v", qErr)
+	}
+
+	// 4. Resume -dL -resume: skips a.test, completes b.test and c.test (Issue #3).
+	enumMu.Lock()
+	enumCounts = make(map[string]int)
+	enumMu.Unlock()
+
+	r2, err := NewRunner(&types.Options{
+		Command:    "scan",
+		DomainList: rootsFile,
+		DBPath:     dbPath,
+		Depth:      0,
+		NoProbe:    true,
+		NoDNS:      true,
+		Resume:     true,
+		Silent:     true,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	r2.enumFn = func(_ context.Context, domain string) (map[string][]string, error) {
+		enumMu.Lock()
+		enumCounts[domain]++
+		enumMu.Unlock()
+		return map[string][]string{"app." + domain: {"crtsh"}}, nil
+	}
+	if err := r2.Run(context.Background()); err != nil {
+		t.Fatalf("resume run failed: %v", err)
+	}
+	_ = r2.Close()
+
+	if enumCounts["a.test"] != 0 || enumCounts["b.test"] != 1 || enumCounts["c.test"] != 1 {
+		t.Fatalf("unexpected enumCounts on resume: %v", enumCounts)
+	}
+
+	// 5. Run -probe-only without -d/-dL: resolves and probes all stored roots with zero enum calls (Issue #4).
+	r3, err := NewRunner(&types.Options{
+		Command:   "scan",
+		DBPath:    dbPath,
+		ProbeOnly: true,
+		Threads:   2,
+		RateLimit: 100,
+		Timeout:   3,
+		NoAuth:    true,
+		NoContent: true,
+		Silent:    true,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	r3.targetAddr = ts.Listener.Addr().String()
+	r3.enumFn = func(_ context.Context, domain string) (map[string][]string, error) {
+		t.Fatalf("enumFn must not be called in -probe-only mode (called for %s)", domain)
+		return nil, nil
+	}
+	if err := r3.Run(context.Background()); err != nil {
+		t.Fatalf("probe-only run failed: %v", err)
+	}
+	_ = r3.Close()
+
+	// 6. Query -alive after -probe-only now succeeds (exit 0) and sees live hosts (Issue #4 & #5).
+	rq2, err := NewRunner(&types.Options{
+		Command:      "query",
+		DBPath:       dbPath,
+		Target:       "a.test",
+		Alive:        true,
+		OutputFormat: "list",
+		Silent:       true,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := rq2.Run(context.Background()); err != nil {
+		t.Fatalf("expected query -alive to succeed after -probe-only, got %v", err)
+	}
+	_ = rq2.Close()
+
+	ro, err := store.New(dbPath, true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = ro.Close() }()
+	alive, err := ro.QueryHosts(types.Filter{Alive: "yes", Depth: -1})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(alive) != 6 { // a.test, app.a.test, b.test, app.b.test, c.test, app.c.test
+		t.Fatalf("expected 6 alive hosts across 3 roots after -probe-only, got %d (%+v)", len(alive), alive)
 	}
 }

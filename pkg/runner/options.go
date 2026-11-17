@@ -51,6 +51,8 @@ func ParseOptions() *types.Options {
 	flagSet.CreateGroup("input", "INPUT",
 		flagSet.StringVarP(&opts.Domain, "domain", "d", "", "root domain to scan"),
 		flagSet.StringVarP(&opts.DomainList, "list", "dL", "", "file with root domains, one per line"),
+		flagSet.BoolVar(&opts.Resume, "resume", false, "skip roots already completed in the database"),
+		flagSet.BoolVar(&opts.SkipCompleted, "skip-completed", false, "alias for -resume"),
 	)
 
 	// Storage
@@ -60,7 +62,7 @@ func ParseOptions() *types.Options {
 
 	// Crawling / Recursion
 	flagSet.CreateGroup("recursion", "RECURSION",
-		flagSet.IntVar(&opts.Depth, "depth", -1, "recursion rounds after root (-1 = auto-increase until nothing new is found, 0 = root only)"),
+		flagSet.IntVar(&opts.Depth, "depth", -1, "recursion rounds after root (-1 = auto until nothing new, 0 = root only; also resolves/probes stored hosts, see -probe-only)"),
 		flagSet.IntVar(&opts.MaxHosts, "max-hosts", 5000, "stop enumerating a root after this many hosts (0 = no cap)"),
 		flagSet.StringSliceVar(&opts.Exclude, "exclude", nil, "out-of-scope hosts/suffixes (comma-separated)", goflags.CommaSeparatedStringSliceOptions),
 	)
@@ -90,6 +92,7 @@ func ParseOptions() *types.Options {
 		flagSet.IntVar(&opts.Timeout, "timeout", 7, "httpx request timeout in seconds"),
 		flagSet.BoolVar(&opts.FollowRedirects, "follow", false, "follow redirects when probing"),
 		flagSet.BoolVar(&opts.NoProbe, "no-probe", false, "enumerate only, skip httpx"),
+		flagSet.BoolVar(&opts.ProbeOnly, "probe-only", false, "resolve and probe hosts already stored in the database without enumeration"),
 		flagSet.BoolVar(&opts.NoAuth, "no-auth", false, "skip asset role (register/login/landing) classification"),
 		flagSet.IntVar(&opts.AuthThreads, "auth-threads", 10, "asset classification concurrency threads"),
 		flagSet.BoolVar(&opts.NoContent, "no-content", false, "disable content-derived host discovery from HTTP responses"),
@@ -183,7 +186,7 @@ func validateOptions(opts *types.Options) error {
 		switch {
 		case opts.Serve != "":
 			opts.Command = "serve"
-		case opts.Domain != "" || opts.DomainList != "":
+		case opts.Domain != "" || opts.DomainList != "" || opts.ProbeOnly:
 			opts.Command = "scan"
 		case opts.Report || opts.ReportOutput != "":
 			opts.Command = "report"
@@ -194,7 +197,7 @@ func validateOptions(opts *types.Options) error {
 		}
 	}
 
-	if opts.Command == "query" || opts.Command == "report" || opts.Command == "serve" {
+	if opts.Command == "query" || opts.Command == "report" || opts.Command == "serve" || (opts.Command == "scan" && opts.ProbeOnly && opts.Domain == "" && opts.DomainList == "") {
 		if opts.DBPath == "" {
 			if opts.Domain != "" {
 				opts.DBPath = opts.Domain + ".db"
@@ -214,6 +217,10 @@ func validateOptions(opts *types.Options) error {
 
 	if opts.Alive && opts.Dead {
 		return errors.New("conflicting flags: -alive and -dead cannot be used together")
+	}
+
+	if opts.ProbeOnly && opts.NoProbe {
+		return errors.New("conflicting flags: -probe-only and -no-probe cannot be used together")
 	}
 
 	if opts.ContentDepth < 0 {

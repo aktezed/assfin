@@ -88,12 +88,14 @@ Flags:
 INPUT:
    -d, -domain string  root domain to scan
    -dL, -list string   file with root domains, one per line
+   -resume             skip roots already completed in the database
+   -skip-completed     alias for -resume
 
 STORAGE:
    -db string  SQLite output (default <domain>.db, or assfin.db with -dL)
 
 RECURSION:
-   -depth int         recursion rounds after root (-1 = auto-increase until nothing new is found, 0 = root only) (default -1)
+   -depth int         recursion rounds after root (-1 = auto until nothing new, 0 = root only; also resolves/probes stored hosts, see -probe-only) (default -1)
    -max-hosts int     stop enumerating a root after this many hosts (0 = no cap) (default 5000)
    -exclude string[]  out-of-scope hosts/suffixes (comma-separated)
 
@@ -117,6 +119,7 @@ PROBING & CLASSIFICATION:
    -timeout int         httpx request timeout in seconds (default 7)
    -follow              follow redirects when probing
    -no-probe            enumerate only, skip httpx
+   -probe-only          resolve and probe hosts already stored in the database without enumeration
    -no-auth             skip asset role (register/login/landing) classification
    -auth-threads int    asset classification concurrency threads (default 10)
    -no-content          disable content-derived host discovery from HTTP responses
@@ -175,10 +178,17 @@ assfin scan -d example.com -report
 assfin scan -d example.com -report -out dashboard.html
 ```
 
-Scan multiple root domains from an input file:
+Scan multiple root domains from an input file (and resume after a timeout or interruption):
 
 ```bash
 assfin scan -dL roots.txt -db targets.db
+assfin scan -dL roots.txt -db targets.db -resume
+```
+
+Resolve and probe hosts already stored in the database (e.g. after `-no-probe` or an interrupted enumeration) without re-running passive enumeration:
+
+```bash
+assfin scan -db targets.db -probe-only
 ```
 
 Exclude out-of-scope subdomains or domains:
@@ -191,7 +201,8 @@ assfin scan -d example.com -exclude staging.example.com,internal.example.com
 
 | Flag | Default | Description |
 |---|---|---|
-| `-depth` | `-1` (auto) | Automatically increases depth (`1 -> 2 -> 3...`) until no new hosts are found (`0` = root only) |
+| `-depth` | `-1` (auto) | Automatically increases depth (`1 -> 2 -> 3...`) until no new hosts are found (`0` = root-only enum, still resolves and probes all stored hosts) |
+| `-resume` | `false` | Skip roots whose latest scan in the DB is already marked completed (`-skip-completed` alias) |
 | `-max-hosts` | `5000` | Max hosts to discover per root domain before stopping |
 | `-sf-concurrency` | `5` | Number of subdomains enumerated concurrently |
 | `-sf-timeout` | `15s` | Subfinder per-source timeout |
@@ -206,6 +217,7 @@ assfin scan -d example.com -exclude staging.example.com,internal.example.com
 | `-timeout` | `7s` | HTTP request timeout |
 | `-follow` | `false` | Follow HTTP redirects |
 | `-no-probe` | `false` | Skip `httpx` HTTP probing (`subfinder` and `dnsx` still run unless `-no-dns` is also set) |
+| `-probe-only` | `false` | Resolve and probe hosts already stored in the database without running passive enumeration |
 | `-no-auth` | `false` | Skip asset role (`register`, `login_only`, `landing`) classification |
 | `-auth-threads` | `10` | Worker thread count for in-scope asset role classification |
 | `-no-content` | `false` | Disable content-derived host discovery from probed HTTP responses |
@@ -227,7 +239,7 @@ assfin scan -d example.com -pc /path/to/provider-config.yaml
 
 ## Querying Results
 
-Query mode allows fast filtering against an existing SQLite database without making any network requests.
+Query mode allows fast filtering against an existing SQLite database without making any network requests. If a probe filter (such as `-alive` or `-status`) matches zero rows because the stored hosts have never been probed (`-no-probe` or interrupted before probing), `assfin` writes a notice to `stderr` and exits with code `2` (vs `0` when probing completed with no matches).
 
 ```bash
 # Filter alive hosts with no WAF detected

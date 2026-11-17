@@ -22,6 +22,18 @@ import (
 	"github.com/projectdiscovery/gologger"
 )
 
+// ErrNotProbed indicates a query matched zero rows because stored hosts have not been probed yet.
+var ErrNotProbed = errors.New("0 hosts probed")
+
+// ExitError carries a specific process exit code for CLI callers.
+type ExitError struct {
+	Code int
+	Err  error
+}
+
+func (e *ExitError) Error() string { return e.Err.Error() }
+func (e *ExitError) Unwrap() error { return e.Err }
+
 // Runner manages the lifecycle and execution of assfin tasks.
 type Runner struct {
 	options    *types.Options
@@ -65,12 +77,46 @@ func (r *Runner) Run(ctx context.Context) error {
 
 // ExecuteScan executes subdomain discovery and HTTP probing.
 func (r *Runner) ExecuteScan(ctx context.Context) error {
-	roots, err := readRoots(r.options.Domain, r.options.DomainList)
-	if err != nil {
-		return err
-	}
+	var (
+		roots   []string
+		dbStore *store.Store
+		err     error
+	)
 
 	dbPath := r.options.DBPath
+	if r.options.ProbeOnly && r.options.Domain == "" && r.options.DomainList == "" {
+		if r.options.Target != "" {
+			roots = []string{scan.Normalize(r.options.Target)}
+			if dbPath == "" {
+				dbPath = roots[0] + ".db"
+			}
+		} else {
+			if dbPath == "" {
+				dbPath = "assfin.db"
+			}
+			if _, statErr := os.Stat(dbPath); statErr != nil {
+				return fmt.Errorf("database not found: %w (pass -d, -dL, or an existing -db)", statErr)
+			}
+			dbStore, err = store.New(dbPath, false)
+			if err != nil {
+				return fmt.Errorf("open store: %w", err)
+			}
+			r.store = dbStore
+			roots, err = dbStore.DistinctRoots()
+			if err != nil {
+				return err
+			}
+			if len(roots) == 0 {
+				return errors.New("no stored hosts in database to probe (pass -d or -dL)")
+			}
+		}
+	} else {
+		roots, err = readRoots(r.options.Domain, r.options.DomainList)
+		if err != nil {
+			return err
+		}
+	}
+
 	if dbPath == "" {
 		dbPath = "assfin.db"
 		if len(roots) == 1 {
@@ -85,17 +131,22 @@ func (r *Runner) ExecuteScan(ctx context.Context) error {
 
 	optsJSON, _ := json.Marshal(r.options)
 
-	dbStore, err := store.New(dbPath, false)
-	if err != nil {
-		return fmt.Errorf("open store: %w", err)
-	}
-	r.store = dbStore
-
-	enum := r.enumFn
-	if enum == nil {
-		enum, err = scan.NewSubfinder(r.options.SubfinderTimeout, r.options.SubfinderMaxTime, r.options.ProviderConfig)
+	if dbStore == nil {
+		dbStore, err = store.New(dbPath, false)
 		if err != nil {
-			return fmt.Errorf("subfinder init: %w", err)
+			return fmt.Errorf("open store: %w", err)
+		}
+		r.store = dbStore
+	}
+
+	var enum scan.EnumFunc
+	if !r.options.ProbeOnly {
+		enum = r.enumFn
+		if enum == nil {
+			enum, err = scan.NewSubfinder(r.options.SubfinderTimeout, r.options.SubfinderMaxTime, r.options.ProviderConfig)
+			if err != nil {
+				return fmt.Errorf("subfinder init: %w", err)
+			}
 		}
 	}
 
@@ -149,26 +200,61 @@ func (r *Runner) ExecuteScan(ctx context.Context) error {
 
 	totalScanStart := time.Now()
 
-	for _, root := range roots {
+	toRun := roots
+	var skipped []string
+	if r.options.Resume || r.options.SkipCompleted {
+		doneRoots, cErr := dbStore.CompletedRoots()
+		if cErr != nil {
+			return cErr
+		}
+		toRun = make([]string, 0, len(roots))
+		for _, root := range roots {
+			if doneRoots[root] {
+				skipped = append(skipped, root)
+			} else {
+				toRun = append(toRun, root)
+			}
+		}
+		if len(skipped) > 0 {
+			gologger.Info().Msgf("resuming: skipping %d completed root(s) [%s], %d remaining",
+				len(skipped), formatRootList(skipped), len(toRun))
+		}
+	}
+
+	var (
+		completed []string
+		stopErr   error
+		stopIdx   = len(toRun)
+	)
+
+	for i, root := range toRun {
+		if ctxErr := ctx.Err(); ctxErr != nil {
+			stopIdx = i
+			stopErr = ctxErr
+			break
+		}
+
+		if r.options.ProbeOnly {
+			stored, qErr := dbStore.QueryHosts(types.Filter{Root: root, Depth: -1})
+			if qErr != nil {
+				stopIdx = i
+				stopErr = qErr
+				break
+			}
+			if len(stored) == 0 {
+				gologger.Warning().Msgf("[%s] no stored hosts in %s to probe; skipping", root, dbPath)
+				continue
+			}
+		}
+
 		scanStart := time.Now()
 		scanID, err := dbStore.StartScan(root, string(optsJSON))
 		if err != nil {
-			return err
+			stopIdx = i
+			stopErr = err
+			break
 		}
 
-		depthLabel := "auto"
-		if r.options.Depth >= 0 {
-			depthLabel = strconv.Itoa(r.options.Depth)
-		}
-		gologger.Info().Msgf("[%s] enumerating subdomains (depth %s, passive only)", root, depthLabel)
-		if err := dbStore.UpsertHost(scanID, root, root, 0, nil); err != nil {
-			return err
-		}
-
-		var (
-			dbErr      error
-			discovered atomic.Int64
-		)
 		st := &scanState{
 			scanID:      scanID,
 			root:        root,
@@ -185,52 +271,78 @@ func (r *Runner) ExecuteScan(ctx context.Context) error {
 			hostSources: make(map[string][]string),
 			sourceStats: make(map[string]*types.SourceStat),
 		}
-		crawlOpts := scan.CrawlOpts{
-			Depth:       r.options.Depth,
-			MaxHosts:    r.options.MaxHosts,
-			Conc:        r.options.SubfinderConcurrency,
-			Exclude:     exclude,
-			Seen:        st.seen,
-			Queried:     st.queried,
-			Malformed:   st.malformed,
-			OnMalformed: st.recordMalformed,
-		}
 
-		enumStart := time.Now()
-		tickerCtx, cancelTicker := context.WithCancel(ctx)
-		go func() {
-			t := time.NewTicker(10 * time.Second)
-			defer t.Stop()
-			for {
-				select {
-				case <-tickerCtx.Done():
-					return
-				case <-t.C:
-					gologger.Info().Msgf("[%s] enumerating... (%s elapsed, %d subdomains found)",
-						root, types.FormatDuration(time.Since(enumStart)), discovered.Load())
+		var enumDuration time.Duration
+		if r.options.ProbeOnly {
+			gologger.Info().Msgf("[%s] probe-only mode: resolving and probing stored hosts", root)
+		} else {
+			depthLabel := "auto"
+			if r.options.Depth >= 0 {
+				depthLabel = strconv.Itoa(r.options.Depth)
+			}
+			gologger.Info().Msgf("[%s] enumerating subdomains (depth %s, passive only)", root, depthLabel)
+			if err := dbStore.UpsertHost(scanID, root, root, 0, nil); err != nil {
+				stopIdx = i
+				stopErr = err
+				break
+			}
+
+			var (
+				dbErr      error
+				discovered atomic.Int64
+			)
+			crawlOpts := scan.CrawlOpts{
+				Depth:       r.options.Depth,
+				MaxHosts:    r.options.MaxHosts,
+				Conc:        r.options.SubfinderConcurrency,
+				Exclude:     exclude,
+				Seen:        st.seen,
+				Queried:     st.queried,
+				Malformed:   st.malformed,
+				OnMalformed: st.recordMalformed,
+				OnRound:     func(round int) { _ = dbStore.SetScanRounds(scanID, round) },
+			}
+
+			enumStart := time.Now()
+			tickerCtx, cancelTicker := context.WithCancel(ctx)
+			go func() {
+				t := time.NewTicker(10 * time.Second)
+				defer t.Stop()
+				for {
+					select {
+					case <-tickerCtx.Done():
+						return
+					case <-t.C:
+						gologger.Info().Msgf("[%s] enumerating... (%s elapsed, %d subdomains found)",
+							root, types.FormatDuration(time.Since(enumStart)), discovered.Load())
+					}
 				}
+			}()
+
+			err = scan.Crawl(ctx, root, crawlOpts, enum, func(h string, sources []string) {
+				discovered.Add(1)
+				st.recordFound(h, sources)
+				if err := dbStore.UpsertHost(scanID, root, h, scan.LabelDepth(h, root), sources); err != nil && dbErr == nil {
+					dbErr = err
+				}
+			})
+			cancelTicker()
+			enumDuration = time.Since(enumStart)
+
+			if dbErr != nil {
+				stopIdx = i
+				stopErr = dbErr
+				break
 			}
-		}()
-
-		err = scan.Crawl(ctx, root, crawlOpts, enum, func(h string, sources []string) {
-			discovered.Add(1)
-			st.recordFound(h, sources)
-			if err := dbStore.UpsertHost(scanID, root, h, scan.LabelDepth(h, root), sources); err != nil && dbErr == nil {
-				dbErr = err
+			if err != nil {
+				stopIdx = i
+				stopErr = fmt.Errorf("enumeration stopped: %w (partial results saved to %s)", err, dbPath)
+				break
 			}
-		})
-		cancelTicker()
-		enumDuration := time.Since(enumStart)
 
-		if dbErr != nil {
-			return dbErr
+			gologger.Info().Msgf("[%s] enumeration completed: %d hosts discovered in %s",
+				root, discovered.Load(), types.FormatDuration(enumDuration))
 		}
-		if err != nil {
-			return fmt.Errorf("enumeration stopped: %w (partial results saved to %s)", err, dbPath)
-		}
-
-		gologger.Info().Msgf("[%s] enumeration completed: %d hosts discovered in %s",
-			root, discovered.Load(), types.FormatDuration(enumDuration))
 
 		var (
 			dnsDuration   time.Duration
@@ -241,10 +353,14 @@ func (r *Runner) ExecuteScan(ctx context.Context) error {
 			if resolve != nil {
 				known, qErr := dbStore.QueryHosts(types.Filter{Root: root, Depth: -1})
 				if qErr != nil {
-					return qErr
+					stopIdx = i
+					stopErr = qErr
+					break
 				}
 				if rErr := dbStore.ResetDNS(root); rErr != nil {
-					return rErr
+					stopIdx = i
+					stopErr = rErr
+					break
 				}
 				knownHosts := make([]string, len(known))
 				for i, h := range known {
@@ -253,13 +369,17 @@ func (r *Runner) ExecuteScan(ctx context.Context) error {
 				}
 				_, dnsDuration, err = r.filterStoredHostsDNS(ctx, dbStore, st, knownHosts)
 				if err != nil {
-					return fmt.Errorf("dns resolution stopped: %w (partial results saved to %s)", err, dbPath)
+					stopIdx = i
+					stopErr = fmt.Errorf("dns resolution stopped: %w (partial results saved to %s)", err, dbPath)
+					break
 				}
 			}
 		} else {
 			dnsDuration, probeDuration, err = r.probeAndDiscover(ctx, dbStore, st)
 			if err != nil {
-				return fmt.Errorf("probing stopped: %w (partial results saved to %s)", err, dbPath)
+				stopIdx = i
+				stopErr = fmt.Errorf("probing stopped: %w (partial results saved to %s)", err, dbPath)
+				break
 			}
 
 			// Classify asset roles across alive endpoints (registerable, login-only, landing)
@@ -279,12 +399,17 @@ func (r *Runner) ExecuteScan(ctx context.Context) error {
 		}
 
 		if err := dbStore.FinishScan(scanID); err != nil {
-			return err
+			stopIdx = i
+			stopErr = err
+			break
 		}
+		completed = append(completed, root)
 
 		all, err := dbStore.QueryHosts(types.Filter{Root: root, Depth: -1})
 		if err != nil {
-			return err
+			stopIdx = i + 1
+			stopErr = err
+			break
 		}
 
 		var alive, resolvedCount, danglingCount, wafCount, fresh int
@@ -328,8 +453,20 @@ func (r *Runner) ExecuteScan(ctx context.Context) error {
 		}
 	}
 
-	if len(roots) > 1 {
-		gologger.Info().Msgf("all %d domains scanned in %s", len(roots), types.FormatDuration(time.Since(totalScanStart)))
+	pending := toRun[stopIdx:]
+	if stopErr != nil {
+		gologger.Warning().Msgf("run summary: completed=%d [%s], skipped=%d, pending=%d [%s], reason=%s (rerun with -resume to continue)",
+			len(completed), formatRootList(completed), len(skipped), len(pending), formatRootList(pending), describeStopReason(stopErr))
+		return stopErr
+	}
+
+	if len(roots) > 1 || len(skipped) > 0 {
+		reason := "all roots completed"
+		if len(toRun) == 0 && len(skipped) > 0 {
+			reason = "all roots already completed"
+		}
+		gologger.Info().Msgf("run summary: completed=%d [%s], skipped=%d, pending=0, reason=%s in %s",
+			len(completed), formatRootList(completed), len(skipped), reason, types.FormatDuration(time.Since(totalScanStart)))
 	}
 
 	scopeRoot := ""
@@ -626,7 +763,7 @@ func (r *Runner) probeAndDiscover(ctx context.Context, dbStore *store.Store, st 
 			break
 		}
 
-		if r.options.Depth != 0 {
+		if !r.options.ProbeOnly && r.options.Depth != 0 {
 			feedbackDepth := r.options.Depth
 			if feedbackDepth > 0 {
 				feedbackDepth--
@@ -924,6 +1061,13 @@ func (r *Runner) ExecuteQuery(ctx context.Context) error {
 		return nil
 	}
 
+	unprobed := false
+	if len(hosts) == 0 && (r.options.Alive || r.options.Dead || r.options.Status != "" || len(r.options.Tech) > 0 || r.options.AuthType != "") {
+		if ok, uErr := dbStore.UnprobedScope(target); uErr == nil && ok {
+			unprobed = true
+		}
+	}
+
 	switch r.options.OutputFormat {
 	case "list":
 		for _, h := range hosts {
@@ -935,32 +1079,45 @@ func (r *Runner) ExecuteQuery(ctx context.Context) error {
 		if hosts == nil {
 			hosts = []types.Host{}
 		}
-		return enc.Encode(hosts)
-	case "table":
-		w := tabwriter.NewWriter(os.Stdout, 0, 0, 2, ' ', 0)
-		fmt.Fprintln(w, "HOST\tSTATUS\tAUTH\tTITLE\tTECH\tWAF\tIPS\tCNAME")
-		for _, h := range hosts {
-			st := "-"
-			if h.Alive {
-				st = strconv.Itoa(h.Status)
-			}
-			auth := "-"
-			if h.AuthType != "" {
-				auth = h.AuthType
-			}
-			cname := "-"
-			if h.CNAME != "" {
-				cname = types.ClipRunes(h.CNAME, 35)
-			}
-			fmt.Fprintf(w, "%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n",
-				h.Host, st, auth, types.ClipRunes(h.Title, 35), types.ClipRunes(strings.Join(h.Tech, ","), 35), h.WAF, h.IPs, cname)
-		}
-		if err := w.Flush(); err != nil {
+		if err := enc.Encode(hosts); err != nil {
 			return err
 		}
-		fmt.Fprintf(os.Stderr, "%d hosts\n", len(hosts))
+	case "table":
+		if !unprobed {
+			w := tabwriter.NewWriter(os.Stdout, 0, 0, 2, ' ', 0)
+			fmt.Fprintln(w, "HOST\tSTATUS\tAUTH\tTITLE\tTECH\tWAF\tIPS\tCNAME")
+			for _, h := range hosts {
+				st := "-"
+				if h.Alive {
+					st = strconv.Itoa(h.Status)
+				}
+				auth := "-"
+				if h.AuthType != "" {
+					auth = h.AuthType
+				}
+				cname := "-"
+				if h.CNAME != "" {
+					cname = types.ClipRunes(h.CNAME, 35)
+				}
+				fmt.Fprintf(w, "%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n",
+					h.Host, st, auth, types.ClipRunes(h.Title, 35), types.ClipRunes(strings.Join(h.Tech, ","), 35), h.WAF, h.IPs, cname)
+			}
+			if err := w.Flush(); err != nil {
+				return err
+			}
+			fmt.Fprintf(os.Stderr, "%d hosts\n", len(hosts))
+		}
 	default:
 		return fmt.Errorf("unknown output format %q (table, list, json)", r.options.OutputFormat)
+	}
+
+	if unprobed {
+		scope := "in database"
+		if target != "" {
+			scope = "for " + target
+		}
+		fmt.Fprintf(os.Stderr, "0 hosts probed %s; run without -no-probe or use -probe-only\n", scope)
+		return &ExitError{Code: 2, Err: ErrNotProbed}
 	}
 
 	return nil
@@ -1076,4 +1233,26 @@ func b2i(b bool) int {
 		return 1
 	}
 	return 0
+}
+
+func formatRootList(roots []string) string {
+	if len(roots) == 0 {
+		return "none"
+	}
+	const limit = 20
+	if len(roots) <= limit {
+		return strings.Join(roots, ", ")
+	}
+	return fmt.Sprintf("%s (+%d more)", strings.Join(roots[:limit], ", "), len(roots)-limit)
+}
+
+func describeStopReason(err error) string {
+	switch {
+	case errors.Is(err, context.DeadlineExceeded):
+		return "timeout (deadline exceeded)"
+	case errors.Is(err, context.Canceled):
+		return "interrupted (signal/context canceled)"
+	default:
+		return err.Error()
+	}
 }

@@ -157,6 +157,9 @@ func Probe(ctx context.Context, hosts []string, o ProbeOpts, onResult func(host 
 			})
 		},
 	}
+	restoreLogger := preserveDefaultLoggerLevel()
+	defer restoreLogger()
+
 	if err := opts.ValidateOptions(); err != nil {
 		return fmt.Errorf("httpx options: %w", err)
 	}
@@ -164,6 +167,7 @@ func Probe(ctx context.Context, hosts []string, o ProbeOpts, onResult func(host 
 	if err != nil {
 		return fmt.Errorf("httpx: %w", err)
 	}
+	restoreLogger()
 	done := make(chan struct{})
 	go func() {
 		defer close(done)

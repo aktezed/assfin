@@ -27,6 +27,9 @@ func NewSubfinder(timeout, maxMinutes int, providerConfig string) (EnumFunc, err
 			return nil, fmt.Errorf("rate limit %q: %w", s, err)
 		}
 	}
+	restoreLogger := preserveDefaultLoggerLevel()
+	defer restoreLogger()
+
 	r, err := subfinder.NewRunner(&subfinder.Options{
 		Threads:            10,
 		Timeout:            timeout,

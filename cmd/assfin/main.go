@@ -16,6 +16,10 @@ func main() {
 
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
+	go func() {
+		<-ctx.Done()
+		stop() // Allow a second signal to terminate immediately.
+	}()
 
 	r, err := runner.NewRunner(options)
 	if err != nil {

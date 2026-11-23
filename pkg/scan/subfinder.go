@@ -46,9 +46,28 @@ func NewSubfinder(timeout, maxMinutes int, providerConfig string) (EnumFunc, err
 		return nil, err
 	}
 	return func(ctx context.Context, domain string) (map[string][]string, error) {
-		m, err := r.EnumerateSingleDomainWithCtx(ctx, domain, []io.Writer{io.Discard})
-		if err != nil {
+		if err := ctx.Err(); err != nil {
 			return nil, err
+		}
+		type result struct {
+			m   map[string]map[string]struct{}
+			err error
+		}
+		ch := make(chan result, 1)
+		go func() {
+			m, err := r.EnumerateSingleDomainWithCtx(ctx, domain, []io.Writer{io.Discard})
+			ch <- result{m: m, err: err}
+		}()
+
+		var m map[string]map[string]struct{}
+		select {
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		case res := <-ch:
+			if res.err != nil {
+				return nil, res.err
+			}
+			m = res.m
 		}
 		out := make(map[string][]string, len(m))
 		for h, srcs := range m {
